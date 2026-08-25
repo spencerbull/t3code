@@ -1,6 +1,7 @@
 import {
   AuthAdministrativeScopes,
   EnvironmentHttpApi,
+  EnvironmentHttpCommonError,
   type HostThemeRefreshResult,
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
@@ -10,20 +11,80 @@ import * as Option from "effect/Option";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import { Command, Flag, GlobalFlag } from "effect/unstable/cli";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient, HttpClientError } from "effect/unstable/http";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
+import { baseDirFlag } from "./config.ts";
 import { discoverPairTarget, makePairServerConfig } from "./pair.ts";
+
+const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
+
+export class ThemeRefreshDeclaredResponseError extends Schema.TaggedErrorClass<ThemeRefreshDeclaredResponseError>()(
+  "ThemeRefreshDeclaredResponseError",
+  {
+    operation: Schema.Literal("requestHostThemeRefresh"),
+    code: Schema.String,
+    traceId: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Host theme refresh failed (${this.code}, trace ${this.traceId}).`;
+  }
+}
+
+export class ThemeRefreshUndeclaredStatusError extends Schema.TaggedErrorClass<ThemeRefreshUndeclaredStatusError>()(
+  "ThemeRefreshUndeclaredStatusError",
+  {
+    operation: Schema.Literal("requestHostThemeRefresh"),
+    status: Schema.Int,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Host theme refresh failed with undeclared status ${this.status}.`;
+  }
+}
 
 export class ThemeRefreshRequestError extends Schema.TaggedErrorClass<ThemeRefreshRequestError>()(
   "ThemeRefreshRequestError",
-  { cause: Schema.Defect() },
+  {
+    operation: Schema.Literal("requestHostThemeRefresh"),
+    cause: Schema.Defect(),
+  },
 ) {
   override get message(): string {
     return "Failed to refresh the running server's host theme.";
   }
+}
+
+export type ThemeRefreshError =
+  | ThemeRefreshDeclaredResponseError
+  | ThemeRefreshUndeclaredStatusError
+  | ThemeRefreshRequestError;
+
+/** Same classification as projectCommandErrorFromLiveServerRequest: declared
+ * code/trace errors and undeclared HTTP statuses keep their identity; only
+ * transport failures collapse into the generic request error. */
+export function themeRefreshErrorFromRequest(cause: unknown): ThemeRefreshError {
+  if (isEnvironmentHttpCommonError(cause)) {
+    return new ThemeRefreshDeclaredResponseError({
+      operation: "requestHostThemeRefresh",
+      code: cause.code,
+      traceId: cause.traceId,
+      cause,
+    });
+  }
+  if (HttpClientError.isHttpClientError(cause) && cause.response !== undefined) {
+    return new ThemeRefreshUndeclaredStatusError({
+      operation: "requestHostThemeRefresh",
+      status: cause.response.status,
+      cause,
+    });
+  }
+  return new ThemeRefreshRequestError({ operation: "requestHostThemeRefresh", cause });
 }
 
 export function formatThemeRefreshOutput(result: HostThemeRefreshResult, json: boolean): string {
@@ -48,7 +109,7 @@ export const requestHostThemeRefresh = Effect.fn("theme.requestHostThemeRefresh"
       headers: { authorization: `Bearer ${bearerToken}` },
       payload: {},
     })
-    .pipe(Effect.mapError((cause) => new ThemeRefreshRequestError({ cause })));
+    .pipe(Effect.mapError(themeRefreshErrorFromRequest));
 });
 
 const withThemeCliSession = <A, E, R>(
@@ -65,6 +126,7 @@ const withThemeCliSession = <A, E, R>(
   );
 
 const themeRefreshCommand = Command.make("refresh", {
+  baseDir: baseDirFlag,
   json: Flag.boolean("json").pipe(
     Flag.withDescription("Print the refresh result as JSON."),
     Flag.withDefault(false),
@@ -75,7 +137,7 @@ const themeRefreshCommand = Command.make("refresh", {
     Effect.gen(function* () {
       const cliLogLevel = yield* GlobalFlag.LogLevel;
       const logLevel = Option.getOrElse(cliLogLevel, () => "Warn" as const);
-      const target = yield* discoverPairTarget(undefined);
+      const target = yield* discoverPairTarget(Option.getOrUndefined(flags.baseDir));
       const config = yield* makePairServerConfig({ target, logLevel });
       const minimumLogLevel = config.logLevel;
 

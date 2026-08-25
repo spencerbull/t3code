@@ -47,7 +47,16 @@ describe("host theme appearance choice", () => {
       label: "Follow system theme",
       description: "Use Dracula from the active environment.",
       actionLabel: "Use",
-      actionDisabled: false,
+      actionPressed: false,
+    });
+  });
+
+  it("marks the selected state pressed instead of disabling the control", () => {
+    expect(getHostThemeChoiceViewModel(hostTheme, true)).toEqual({
+      label: "Follow system theme",
+      description: "Use Dracula from the active environment.",
+      actionLabel: "Following",
+      actionPressed: true,
     });
   });
 });

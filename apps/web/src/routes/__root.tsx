@@ -168,6 +168,9 @@ function RootRouteView() {
 function HostThemeSync() {
   const activeEnvironmentId = useActiveEnvironmentId();
   const serverConfigs = useServerConfigs();
+  const { isReady: environmentCatalogReady, environments } = useEnvironments();
+  const environmentCount = environments.length;
+  const environmentEverResolvedRef = useRef(false);
   const routeTarget = useParams({
     strict: false,
     select: (params) => resolveThreadRouteTarget(params),
@@ -185,6 +188,7 @@ function HostThemeSync() {
     themeEnvironmentId === null ? undefined : serverConfigs.get(themeEnvironmentId);
 
   useEffect(() => {
+    if (themeEnvironmentId !== null) environmentEverResolvedRef.current = true;
     const target = resolveHostThemeSyncTarget({
       environmentId: themeEnvironmentId,
       hostTheme:
@@ -192,10 +196,21 @@ function HostThemeSync() {
           ? undefined
           : (activeConfig.hostTheme ?? null),
       cachedEnvironmentId: getOmarchyHostThemeEnvironmentId(),
+      // Settled once an environment has ever been routed/active this session
+      // (later nulls mean a deliberate move to no environment), or once the
+      // catalog is loaded and holds nothing that could become active.
+      environmentSelectionSettled:
+        environmentEverResolvedRef.current || (environmentCatalogReady && environmentCount === 0),
     });
     if (target === null) return;
     syncOmarchyHostTheme(target.environmentId, target.hostTheme);
-  }, [activeConfig, themeEnvironment, themeEnvironmentId]);
+  }, [
+    activeConfig,
+    environmentCatalogReady,
+    environmentCount,
+    themeEnvironment,
+    themeEnvironmentId,
+  ]);
 
   return null;
 }

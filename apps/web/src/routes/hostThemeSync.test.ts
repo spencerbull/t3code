@@ -25,12 +25,13 @@ const hostTheme = {
 } as const;
 
 describe("host theme environment sync", () => {
-  it("clears an environment A palette when routing changes to no environment", () => {
+  it("clears an environment A palette when routing settles on no environment", () => {
     expect(
       resolveHostThemeSyncTarget({
         environmentId: environmentA,
         hostTheme,
         cachedEnvironmentId: null,
+        environmentSelectionSettled: true,
       }),
     ).toEqual({ environmentId: environmentA, hostTheme });
     expect(
@@ -38,8 +39,32 @@ describe("host theme environment sync", () => {
         environmentId: null,
         hostTheme: undefined,
         cachedEnvironmentId: environmentA,
+        environmentSelectionSettled: true,
       }),
     ).toEqual({ environmentId: null, hostTheme: null });
+  });
+
+  it("keeps the boot cache while the environment selection is still unresolved", () => {
+    // Boot: no environment is selected yet, but the dedicated cache carries
+    // the last selected palette. A clear here would flash the default theme
+    // and delete the cache — the sync must stay a no-op.
+    expect(
+      resolveHostThemeSyncTarget({
+        environmentId: null,
+        hostTheme: undefined,
+        cachedEnvironmentId: environmentA,
+        environmentSelectionSettled: false,
+      }),
+    ).toBeNull();
+    // Same boot state with nothing cached still has nothing to do.
+    expect(
+      resolveHostThemeSyncTarget({
+        environmentId: null,
+        hostTheme: undefined,
+        cachedEnvironmentId: null,
+        environmentSelectionSettled: false,
+      }),
+    ).toBeNull();
   });
 
   it("preserves only the matching environment cache while config is loading or offline", () => {
@@ -48,6 +73,7 @@ describe("host theme environment sync", () => {
         environmentId: environmentA,
         hostTheme: undefined,
         cachedEnvironmentId: environmentA,
+        environmentSelectionSettled: true,
       }),
     ).toBeNull();
     expect(
@@ -55,6 +81,7 @@ describe("host theme environment sync", () => {
         environmentId: environmentB,
         hostTheme: undefined,
         cachedEnvironmentId: environmentA,
+        environmentSelectionSettled: true,
       }),
     ).toEqual({ environmentId: environmentB, hostTheme: null });
   });

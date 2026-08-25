@@ -23,8 +23,9 @@ Normalized, revision-identical reads do not publish. A manual refresh uses the s
 `ServerConfig.hostTheme` is optional and contains only the theme name, light or dark appearance,
 content revision, and ten semantic colors. Clients expand these semantic colors into their complete
 theme role set. Host changes are sent as the existing version 1 full config snapshot, so older
-clients ignore the additive field and every client-runtime cache retains it without a parallel state
-channel.
+clients ignore the additive field without a parallel state channel. The persisted client-runtime
+`ServerConfig` cache strips `hostTheme` before saving; boot continuity comes from the dedicated
+selected-theme cache described below, not from cached config.
 
 `POST /api/server/theme/refresh` requires environment operate authorization and an empty payload.
 The `t3 theme refresh` CLI follows the existing running-server discovery and ephemeral administrative

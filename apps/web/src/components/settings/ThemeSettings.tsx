@@ -67,7 +67,9 @@ export function getHostThemeChoiceViewModel(hostTheme: HostTheme | null, selecte
     label: OMARCHY_THEME_LABEL,
     description: `Use ${hostTheme.name} from the active environment.`,
     actionLabel: selected ? "Following" : "Use",
-    actionDisabled: selected,
+    // Selected state stays focusable and pressed, like the mode tiles and
+    // theme cards; disabled is reserved for in-flight operations.
+    actionPressed: selected,
   } as const;
 }
 
@@ -784,8 +786,8 @@ export function ThemeLibrary({
           </p>
         </div>
         <Button
+          aria-pressed={choice.actionPressed}
           className="shrink-0"
-          disabled={choice.actionDisabled}
           size="xs"
           variant={isSelected ? "secondary" : "outline"}
           onClick={() => persistTheme(OMARCHY_THEME_ID)}

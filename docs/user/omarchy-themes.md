@@ -6,7 +6,8 @@ is hidden unless the active, connected environment currently exposes a host them
 client-local choice: existing theme selections do not change, and each browser or desktop install
 chooses independently.
 
-The selection follows the active environment. Switching to an environment without an available
+The palette follows the environment you are viewing: the thread or draft that is open, otherwise
+the active environment. Switching to an environment without an available
 Omarchy palette falls back to T3 Code's normal appearance until a palette is available again. The
 last selected palette is kept locally so startup and temporary offline periods do not flash a
 different theme. Desktop window chrome follows the detected light or dark appearance as well.

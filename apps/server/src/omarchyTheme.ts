@@ -24,6 +24,8 @@ import * as ProcessRunner from "./processRunner.ts";
 
 const RESOLVER_COMMAND = "omarchy-theme-color";
 const WATCH_DEBOUNCE = Duration.millis(100);
+const WATCH_REARM_MIN_DELAY = Duration.seconds(1);
+const WATCH_REARM_MAX_DELAY = Duration.seconds(30);
 const UNAVAILABLE_REREAD_DELAY = Duration.millis(50);
 const UNAVAILABLE_REREAD_COUNT = 2;
 const RESOLVER_TIMEOUT = Duration.seconds(2);
@@ -186,6 +188,21 @@ export function resolveOmarchyThemeAppearance(
   return relativeLuminance(background) < 0.179 ? "dark" : "light";
 }
 
+/**
+ * Legacy Omarchy themes mark lightness with a `light.mode` file beside
+ * colors.toml instead of a declared mode. The installed resolver already
+ * honors the marker, so only the TOML fallback needs this.
+ */
+export function applyOmarchyLightModeMarker(
+  values: Readonly<Record<string, string>>,
+  lightMarkerExists: boolean,
+): Readonly<Record<string, string>> {
+  if (!lightMarkerExists || values.mode !== undefined || values.theme_type !== undefined) {
+    return values;
+  }
+  return { ...values, mode: "light" };
+}
+
 function makeHostTheme(input: {
   readonly name: string;
   readonly values: Readonly<Record<string, string>>;
@@ -296,11 +313,17 @@ const make = (pathsOverride?: OmarchyThemePaths) =>
       },
     );
 
+    const lightModeMarkerPath = path.join(path.dirname(paths.colorsPath), "light.mode");
     const resolveWithTomlFallback = Effect.fn("OmarchyTheme.resolveWithTomlFallback")(function* () {
       const raw = yield* readFile(paths.colorsPath);
-      return Option.flatMap(raw, (contents) =>
+      const values = Option.flatMap(raw, (contents) =>
         Option.fromNullishOr(parseOmarchyFlatColorsToml(contents)),
       );
+      if (Option.isNone(values)) return values;
+      const lightMarkerExists = yield* fs
+        .exists(lightModeMarkerPath)
+        .pipe(Effect.orElseSucceed(() => false));
+      return Option.some(applyOmarchyLightModeMarker(values.value, lightMarkerExists));
     });
 
     const readCandidate = Effect.fn("OmarchyTheme.readCandidate")(function* () {
@@ -375,15 +398,19 @@ const make = (pathsOverride?: OmarchyThemePaths) =>
       }),
     );
 
-    const currentDirExists = yield* fs
-      .exists(paths.currentDir)
-      .pipe(Effect.orElseSucceed(() => false));
-    if (currentDirExists) {
+    // Watch the stable state root rather than `current` itself: theme swaps
+    // replace `current/theme` (or `current`) while the root stays put, so a
+    // `current` that is missing at startup or replaced later is still
+    // detected. Without the root this is not an Omarchy host, and no watcher
+    // or poller runs at all.
+    const stateRootDir = path.dirname(paths.currentDir);
+
+    const openWatchQueue = Effect.fn("OmarchyTheme.openWatchQueue")(function* () {
       const watchEvents = yield* Queue.sliding<void, Cause.Done>(1);
-      const watcher = yield* Effect.acquireRelease(
+      yield* Effect.acquireRelease(
         Effect.try({
           try: () => {
-            const watcher = NodeFS.watch(paths.currentDir, { recursive: true }, () => {
+            const watcher = NodeFS.watch(stateRootDir, { recursive: true }, () => {
               Queue.offerUnsafe(watchEvents, undefined);
             });
             watcher.on("error", () => {
@@ -397,18 +424,53 @@ const make = (pathsOverride?: OmarchyThemePaths) =>
           catch: (cause) => (cause instanceof Error ? cause.message : String(cause)),
         }),
         (watcher) => Effect.sync(() => watcher.close()),
-      ).pipe(Effect.option);
-      if (Option.isSome(watcher)) {
-        yield* Stream.fromQueue(watchEvents).pipe(
-          Stream.debounce(WATCH_DEBOUNCE),
-          Stream.runForEach(() => refresh.pipe(Effect.ignoreCause({ log: true }))),
-          Effect.ignoreCause({ log: true }),
-          Effect.forkScoped({ startImmediately: true }),
-        );
+      );
+      return watchEvents;
+    });
+
+    const drainWatchEvents = (watchEvents: Queue.Queue<void, Cause.Done>) =>
+      Stream.fromQueue(watchEvents).pipe(
+        Stream.debounce(WATCH_DEBOUNCE),
+        Stream.runForEach(() => refresh.pipe(Effect.ignoreCause({ log: true }))),
+        Effect.ignoreCause({ log: true }),
+      );
+
+    // The queue only ends once its watcher errored or closed. Rearm with
+    // growing, bounded pauses so a flapping watcher cannot spin, and stop for
+    // good when the state root itself is gone.
+    const rearmWatchEvents = Effect.fn("OmarchyTheme.rearmWatchEvents")(function* () {
+      let delay = WATCH_REARM_MIN_DELAY;
+      while (true) {
+        yield* Effect.sleep(delay);
+        delay = Duration.min(Duration.times(delay, 2), WATCH_REARM_MAX_DELAY);
+        const rootExists = yield* fs.exists(stateRootDir).pipe(Effect.orElseSucceed(() => false));
+        if (!rootExists) return;
+        const generation = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const watchEvents = yield* openWatchQueue();
+            // Catch up on anything replaced while no watcher was registered.
+            yield* refresh.pipe(Effect.ignoreCause({ log: true }));
+            yield* drainWatchEvents(watchEvents);
+          }),
+        ).pipe(Effect.result);
+        if (generation._tag === "Success") {
+          delay = WATCH_REARM_MIN_DELAY;
+        }
       }
+    });
+
+    const stateRootExists = yield* fs.exists(stateRootDir).pipe(Effect.orElseSucceed(() => false));
+    if (stateRootExists) {
+      const watchEvents = yield* openWatchQueue().pipe(Effect.option);
+      yield* Effect.gen(function* () {
+        if (Option.isSome(watchEvents)) {
+          yield* drainWatchEvents(watchEvents.value);
+        }
+        yield* rearmWatchEvents();
+      }).pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped({ startImmediately: true }));
     }
 
-    // The Node watcher is acquired synchronously before this authoritative
+    // The Node watcher is registered synchronously before this authoritative
     // snapshot, so replacements cannot land in a registration gap.
     yield* refresh;
 

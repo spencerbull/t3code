@@ -3,12 +3,15 @@ import type { HostTheme } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 
 import {
   OmarchyTheme,
+  applyOmarchyLightModeMarker,
   applyOmarchyThemeCandidate,
   isOmarchyThemeMaterializationCoherent,
   normalizeOmarchyThemePalette,
@@ -102,6 +105,22 @@ describe("Omarchy theme parsing", () => {
     expect(resolveOmarchyThemeAppearance(parsed!, "#f8f8f2")).toBe("light");
   });
 
+  it("honors a light.mode marker only when the fallback file declares no mode", () => {
+    const withoutMode = parseOmarchyFlatColorsToml(flatColors.replace('mode = "dark"\n', ""));
+    expect(withoutMode).not.toBeNull();
+    // Without the marker the dark background infers dark.
+    expect(resolveOmarchyThemeAppearance(withoutMode!, expectedPalette.background)).toBe("dark");
+    expect(applyOmarchyLightModeMarker(withoutMode!, false)).toBe(withoutMode);
+
+    // The legacy marker declares a light theme even over a dark-ish palette.
+    const marked = applyOmarchyLightModeMarker(withoutMode!, true);
+    expect(resolveOmarchyThemeAppearance(marked, expectedPalette.background)).toBe("light");
+
+    // A declared mode in the file wins over the marker.
+    const declared = parseOmarchyFlatColorsToml(flatColors);
+    expect(applyOmarchyLightModeMarker(declared!, true)).toBe(declared);
+  });
+
   it("invokes the installed resolver with an argument array and fixed flags", () => {
     expect(
       omarchyThemeResolverInvocation("/home/test/.local/state/omarchy/current/theme/colors.toml"),
@@ -166,6 +185,53 @@ describe("Omarchy replacement recovery", () => {
     expect(updated.next).toBe(replacement);
     expect(updated.publish).toBe(replacement);
   });
+
+  // it.live: the debounce between watcher events and the refresh runs on the
+  // real clock; the test still only awaits the published change directly.
+  it.live("publishes automatically when current appears under an existing state root", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stateRoot = yield* fs.makeTempDirectoryScoped({ prefix: "omarchy-state-" });
+      const stagingRoot = yield* fs.makeTempDirectoryScoped({ prefix: "omarchy-staging-" });
+      const currentDir = path.join(stateRoot, "current");
+      // Stage a complete theme outside the watched root, name marker last so
+      // its stamp trails the colors generation.
+      const staged = path.join(stagingRoot, "current");
+      yield* fs.makeDirectory(path.join(staged, "theme"), { recursive: true });
+      yield* fs.writeFileString(path.join(staged, "theme", "colors.toml"), flatColors);
+      yield* fs.writeFileString(path.join(staged, "theme.name"), "Dracula\n");
+
+      yield* Effect.gen(function* () {
+        const service = yield* OmarchyTheme;
+        const subscription = yield* service.subscribe;
+        expect(Option.isNone(subscription.latest)).toBe(true);
+
+        // Materialize `current` the way omarchy-theme-set does: one atomic
+        // rename into the watched state root.
+        yield* fs.rename(staged, currentDir);
+
+        const published = Option.getOrUndefined(yield* Stream.runHead(subscription.changes));
+        expect(published?.name).toBe("Dracula");
+        expect(published?.appearance).toBe("dark");
+        expect(published?.colors.background).toBe("#282a36");
+        expect(Option.isSome(yield* service.get)).toBe(true);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          layerForPaths({
+            currentDir,
+            colorsPath: path.join(currentDir, "theme", "colors.toml"),
+            namePath: path.join(currentDir, "theme.name"),
+          }).pipe(
+            Layer.provide(
+              Layer.merge(NodeServices.layer, Layer.succeed(HostProcessPlatform, "linux")),
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 
   for (const { label, platform } of [
     { label: "macOS", platform: "darwin" },

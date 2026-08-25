@@ -13,7 +13,9 @@ import {
   EnvironmentId,
   EventId,
   GitCommandError,
+  type HostTheme,
   KeybindingRule,
+  KeybindingsConfigError,
   MessageId,
   ExternalLauncherCommandNotFoundError,
   OrchestrationThreadDetailSnapshot,
@@ -4820,6 +4822,171 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal("hostTheme" in retraction.config, false);
       }
       if (next?.type === "snapshot") assert.deepEqual(next.config.hostTheme, nextTheme);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("keeps subscribeServerConfig alive when a host-theme config load fails", () =>
+    Effect.gen(function* () {
+      const updatedTheme = {
+        ...TEST_HOST_THEME,
+        name: "Tokyo Night",
+        revision: "b".repeat(64),
+      } as const;
+      const keybindingsChanges = yield* Queue.unbounded<Keybindings.KeybindingsChangeEvent>();
+      const themeLoadFailed = yield* Deferred.make<void>();
+      let failKeybindingsLoad = false;
+
+      yield* buildAppUnderTest({
+        layers: {
+          keybindings: {
+            loadConfigState: Effect.suspend(() =>
+              failKeybindingsLoad
+                ? Deferred.succeed(themeLoadFailed, undefined).pipe(
+                    Effect.andThen(
+                      new KeybindingsConfigError({
+                        configPath: "/tmp/keybindings.json",
+                        detail: "edited to an invalid state during a theme change",
+                      }),
+                    ),
+                  )
+                : Effect.succeed({ keybindings: [], issues: [] }),
+            ),
+            streamChanges: Stream.fromQueue(keybindingsChanges),
+          },
+          omarchyTheme: {
+            get: Effect.succeed(Option.some(TEST_HOST_THEME)),
+            subscribe: Effect.succeed({
+              latest: Option.some(TEST_HOST_THEME),
+              // Live updates are pulled only after the initial snapshot has
+              // loaded, so the flag flips for the theme-triggered load alone.
+              changes: Stream.fromEffect(
+                Effect.sync(() => {
+                  failKeybindingsLoad = true;
+                  return updatedTheme;
+                }),
+              ),
+            }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const events = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const collected = yield* client[WS_METHODS.subscribeServerConfig]({}).pipe(
+              Stream.take(2),
+              Stream.runCollect,
+              Effect.forkChild,
+            );
+            // Emit the keybindings change only after the theme-triggered load
+            // has failed, so its delivery proves the subscription survived.
+            yield* Deferred.await(themeLoadFailed);
+            yield* Queue.offer(keybindingsChanges, { keybindings: [], issues: [] });
+            return yield* Fiber.join(collected);
+          }),
+        ),
+      );
+
+      const [initial, next] = Array.from(events);
+      assert.equal(initial?.type, "snapshot");
+      if (initial?.type === "snapshot") {
+        assert.deepEqual(initial.config.hostTheme, TEST_HOST_THEME);
+      }
+      assert.deepEqual(next, {
+        version: 1,
+        type: "keybindingsUpdated",
+        payload: { keybindings: [], issues: [] },
+      });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("delivers a theme-triggered snapshot before, not after, a newer settings update", () =>
+    Effect.gen(function* () {
+      const updatedTheme = {
+        ...TEST_HOST_THEME,
+        name: "Tokyo Night",
+        revision: "b".repeat(64),
+      } as const;
+      const newerSettings = { ...DEFAULT_SERVER_SETTINGS, enableLegacyTokenStreaming: true };
+      const themeChanges = yield* Queue.unbounded<HostTheme | null>();
+      const settingsChanges = yield* Queue.unbounded<typeof DEFAULT_SERVER_SETTINGS>();
+      const themeLoadReachedDescriptor = yield* Deferred.make<void>();
+      const releaseThemeLoad = yield* Deferred.make<void>();
+      const initialDelivered = yield* Deferred.make<void>();
+      let currentSettings = DEFAULT_SERVER_SETTINGS;
+      let gateNextDescriptorRead = false;
+
+      yield* buildAppUnderTest({
+        layers: {
+          serverSettings: {
+            getSettings: Effect.suspend(() => Effect.succeed(currentSettings)),
+            streamChanges: Stream.fromQueue(settingsChanges),
+          },
+          serverEnvironment: {
+            // The descriptor read sits after the settings read inside
+            // loadServerConfig, so parking here holds a theme-triggered load
+            // open with its settings already read.
+            getDescriptor: Effect.suspend(() => {
+              if (!gateNextDescriptorRead) return Effect.succeed(testEnvironmentDescriptor);
+              gateNextDescriptorRead = false;
+              return Deferred.succeed(themeLoadReachedDescriptor, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseThemeLoad)),
+                Effect.as(testEnvironmentDescriptor),
+              );
+            }),
+          },
+          omarchyTheme: {
+            get: Effect.succeed(Option.some(TEST_HOST_THEME)),
+            subscribe: Effect.succeed({
+              latest: Option.some(TEST_HOST_THEME),
+              changes: Stream.fromQueue(themeChanges),
+            }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const events = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const collected = yield* client[WS_METHODS.subscribeServerConfig]({}).pipe(
+              Stream.take(3),
+              Stream.mapEffect((event, index) =>
+                index === 0
+                  ? Deferred.succeed(initialDelivered, undefined).pipe(Effect.as(event))
+                  : Effect.succeed(event),
+              ),
+              Stream.runCollect,
+              Effect.forkChild,
+            );
+            yield* Deferred.await(initialDelivered);
+            gateNextDescriptorRead = true;
+            yield* Queue.offer(themeChanges, updatedTheme);
+            // While the theme snapshot is mid-load with old settings, land a
+            // newer settings value and its update event, then let it finish.
+            yield* Deferred.await(themeLoadReachedDescriptor);
+            currentSettings = newerSettings;
+            yield* Queue.offer(settingsChanges, newerSettings);
+            yield* Deferred.succeed(releaseThemeLoad, undefined);
+            return yield* Fiber.join(collected);
+          }),
+        ),
+      );
+
+      const [initial, second, third] = Array.from(events);
+      assert.equal(initial?.type, "snapshot");
+      // The stale-read snapshot arrives first; the newer settings event lands
+      // after it, so the client's final state keeps the newer settings.
+      assert.equal(second?.type, "snapshot");
+      if (second?.type === "snapshot") {
+        assert.deepEqual(second.config.hostTheme, updatedTheme);
+        assert.equal(second.config.settings.enableLegacyTokenStreaming, false);
+      }
+      assert.equal(third?.type, "settingsUpdated");
+      if (third?.type === "settingsUpdated") {
+        assert.equal(third.payload.settings.enableLegacyTokenStreaming, true);
+      }
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

@@ -1,11 +1,36 @@
 // @effect-diagnostics nodeBuiltinImport:off - the CLI request test owns an isolated HTTP server.
 import * as NodeHttp from "node:http";
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NetService from "@t3tools/shared/Net";
+import { EnvironmentInternalError } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as TestConsole from "effect/testing/TestConsole";
+import { Command } from "effect/unstable/cli";
+import {
+  FetchHttpClient,
+  HttpClientError,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/unstable/http";
 
-import { formatThemeRefreshOutput, requestHostThemeRefresh } from "./theme.ts";
+import { cli } from "../bin.ts";
+import {
+  makePersistedServerRuntimeState,
+  persistServerRuntimeState,
+} from "../serverRuntimeState.ts";
+import {
+  formatThemeRefreshOutput,
+  requestHostThemeRefresh,
+  themeRefreshErrorFromRequest,
+  ThemeRefreshDeclaredResponseError,
+  ThemeRefreshRequestError,
+  ThemeRefreshUndeclaredStatusError,
+} from "./theme.ts";
 
 describe("t3 theme refresh", () => {
   it.effect("sends only an authenticated empty request and decodes the status", () =>
@@ -90,4 +115,149 @@ describe("t3 theme refresh", () => {
     );
     assert.equal(formatThemeRefreshOutput({ status: "updated" }, true), '{"status":"updated"}');
   });
+
+  it("keeps declared server failures structural with their code and trace", () => {
+    const cause = new EnvironmentInternalError({
+      code: "internal_error",
+      reason: "internal_error",
+      traceId: "trace-123",
+    });
+
+    const error = themeRefreshErrorFromRequest(cause);
+
+    assert.instanceOf(error, ThemeRefreshDeclaredResponseError);
+    assert.strictEqual(error.operation, "requestHostThemeRefresh");
+    assert.strictEqual(error.code, "internal_error");
+    assert.strictEqual(error.traceId, "trace-123");
+    assert.strictEqual(
+      error.message,
+      "Host theme refresh failed (internal_error, trace trace-123).",
+    );
+    assert.strictEqual(error.cause, cause);
+  });
+
+  it("keeps the HTTP status of undeclared response failures", () => {
+    const request = HttpClientRequest.post("http://127.0.0.1:1/api/server/theme/refresh");
+    const response = HttpClientResponse.fromWeb(
+      request,
+      new Response("bad gateway", { status: 502 }),
+    );
+    const cause = new HttpClientError.HttpClientError({
+      reason: new HttpClientError.StatusCodeError({ request, response }),
+    });
+
+    const error = themeRefreshErrorFromRequest(cause);
+
+    assert.instanceOf(error, ThemeRefreshUndeclaredStatusError);
+    assert.strictEqual(error.status, 502);
+    assert.strictEqual(error.message, "Host theme refresh failed with undeclared status 502.");
+    assert.strictEqual(error.cause, cause);
+  });
+
+  it("preserves transport failures without deriving the message from them", () => {
+    const cause = new Error("credential abc123 was rejected");
+
+    const error = themeRefreshErrorFromRequest(cause);
+
+    assert.instanceOf(error, ThemeRefreshRequestError);
+    assert.strictEqual(error.operation, "requestHostThemeRefresh");
+    assert.strictEqual(error.message, "Failed to refresh the running server's host theme.");
+    assert.strictEqual(error.cause, cause);
+  });
+});
+
+const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
+const runCli = (args: ReadonlyArray<string>) => Command.runWith(cli, { version: "0.0.0" })(args);
+
+const captureStdout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    yield* effect;
+    return (
+      (yield* TestConsole.logLines).findLast((line): line is string => typeof line === "string") ??
+      ""
+    );
+  }).pipe(Effect.provide(Layer.mergeAll(CliRuntimeLayer, TestConsole.layer)));
+
+const testDescriptor = {
+  environmentId: "theme-test-environment",
+  label: "theme-test",
+  platform: { os: "linux", arch: "x64" },
+  serverVersion: "0.0.1",
+  capabilities: { repositoryIdentity: true },
+};
+
+/** Answers discovery's descriptor probe and the theme refresh endpoint. */
+const withThemeServer = <A, E, R>(
+  run: (input: {
+    readonly origin: string;
+    readonly refreshAuthorizations: ReadonlyArray<string>;
+  }) => Effect.Effect<A, E, R>,
+) =>
+  Effect.acquireUseRelease(
+    Effect.callback<{ server: NodeHttp.Server; refreshAuthorizations: Array<string> }>((resume) => {
+      const refreshAuthorizations: Array<string> = [];
+      const server = NodeHttp.createServer((request, response) => {
+        if (request.method === "GET" && request.url === "/.well-known/t3/environment") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify(testDescriptor));
+          return;
+        }
+        if (request.method === "POST" && request.url === "/api/server/theme/refresh") {
+          refreshAuthorizations.push(request.headers.authorization ?? "");
+          request.resume();
+          request.on("end", () => {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(JSON.stringify({ status: "updated" }));
+          });
+          return;
+        }
+        response.writeHead(404);
+        response.end();
+      });
+      server.listen(0, "127.0.0.1", () =>
+        resume(Effect.succeed({ server, refreshAuthorizations })),
+      );
+    }),
+    ({ server, refreshAuthorizations }) => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        return Effect.die(new Error("Expected a TCP address"));
+      }
+      return run({
+        origin: `http://127.0.0.1:${String(address.port)}`,
+        refreshAuthorizations,
+      });
+    },
+    ({ server }) =>
+      Effect.callback<void>((resume) => {
+        server.close(() => resume(Effect.void));
+      }),
+  );
+
+describe("t3 theme refresh --base-dir", () => {
+  it.effect("discovers the server recorded under an explicit base dir", () =>
+    withThemeServer(({ origin, refreshAuthorizations }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        // Scoped so the runtime-state file and the ephemeral auth database the
+        // CLI creates under it are removed even when an assertion fails.
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-theme-refresh-" });
+        const statePath = path.join(baseDir, "userdata", "server-runtime.json");
+        yield* persistServerRuntimeState({
+          path: statePath,
+          state: yield* makePersistedServerRuntimeState({
+            config: { host: "127.0.0.1", devUrl: undefined },
+            port: Number(new URL(origin).port),
+          }),
+        });
+
+        const output = yield* captureStdout(runCli(["theme", "refresh", "--base-dir", baseDir]));
+
+        assert.equal(output, "Host theme updated.");
+        assert.equal(refreshAuthorizations.length, 1);
+        assert.isTrue(refreshAuthorizations[0]?.startsWith("Bearer "));
+      }).pipe(Effect.scoped),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
 });

@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
@@ -28,6 +29,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
+  type ServerConfigStreamEvent,
   type OrchestrationThreadStreamItem,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
@@ -2328,22 +2330,43 @@ const makeWsRpcLayer = (
                 })),
               );
               const hostThemeSubscription = yield* omarchyTheme.subscribe;
-              const hostThemeUpdates = hostThemeSubscription.changes.pipe(
-                Stream.mapEffect((hostTheme) => loadServerConfig(Option.fromNullishOr(hostTheme))),
-                Stream.map((config) => ({
-                  version: 1 as const,
-                  type: "snapshot" as const,
-                  config,
-                })),
+              const hostThemeChanges = hostThemeSubscription.changes.pipe(
+                Stream.map((hostTheme) => ({ type: "hostThemeChanged" as const, hostTheme })),
               );
 
               yield* providerRegistry
                 .refresh()
                 .pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
 
+              // One sequential lane over the merged change signals: a
+              // theme-triggered snapshot loads the config in stream order, so
+              // it can never land after — and silently roll back — a newer
+              // settings, provider, or keybindings event already delivered.
+              // A failed load drops only that theme update instead of ending
+              // the subscription.
               const liveUpdates = Stream.merge(
                 keybindingsUpdates,
-                Stream.merge(providerStatuses, Stream.merge(settingsUpdates, hostThemeUpdates)),
+                Stream.merge(providerStatuses, Stream.merge(settingsUpdates, hostThemeChanges)),
+              ).pipe(
+                Stream.filterMapEffect(
+                  (event): Effect.Effect<Result.Result<ServerConfigStreamEvent, void>> =>
+                    event.type !== "hostThemeChanged"
+                      ? Effect.succeed(Result.succeed(event))
+                      : loadServerConfig(Option.fromNullishOr(event.hostTheme)).pipe(
+                          Effect.map((config) =>
+                            Result.succeed({
+                              version: 1 as const,
+                              type: "snapshot" as const,
+                              config,
+                            }),
+                          ),
+                          Effect.catch((cause) =>
+                            Effect.logWarning("Dropped a host-theme config update", {
+                              detail: cause.message,
+                            }).pipe(Effect.as(Result.failVoid)),
+                          ),
+                        ),
+                ),
               );
 
               return Stream.concat(
