@@ -67,6 +67,9 @@ export function getHostThemeChoiceViewModel(hostTheme: HostTheme | null, selecte
     label: OMARCHY_THEME_LABEL,
     description: `Use ${hostTheme.name} from the active environment.`,
     actionLabel: selected ? "Following" : "Use",
+    actionAriaLabel: selected
+      ? "Following system theme from the active environment, currently active"
+      : "Use system theme from the active environment",
     // Selected state stays focusable and pressed, like the mode tiles and
     // theme cards; disabled is reserved for in-flight operations.
     actionPressed: selected,
@@ -786,6 +789,7 @@ export function ThemeLibrary({
           </p>
         </div>
         <Button
+          aria-label={choice.actionAriaLabel}
           aria-pressed={choice.actionPressed}
           className="shrink-0"
           size="xs"

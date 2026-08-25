@@ -20,10 +20,10 @@ survive an atomic replacement window; if it remains unavailable, the server retr
 Normalized, revision-identical reads do not publish. A manual refresh uses the same path and returns
 `updated`, `unchanged`, or `unavailable`.
 
-`ServerConfig.hostTheme` is optional and contains only the theme name, light or dark appearance,
-content revision, and ten semantic colors. Clients expand these semantic colors into their complete
-theme role set. Host changes are sent as the existing version 1 full config snapshot, so older
-clients ignore the additive field without a parallel state channel. The persisted client-runtime
+`ServerConfig.hostTheme` is optional and contains only `source: "omarchy"`, the theme name, light
+or dark appearance, content revision, and ten semantic colors. Clients expand these semantic colors
+into their complete theme role set. Host changes are sent as the existing version 1 full config snapshot,
+so older clients ignore the additive field without a parallel state channel. The persisted client-runtime
 `ServerConfig` cache strips `hostTheme` before saving; boot continuity comes from the dedicated
 selected-theme cache described below, not from cached config.
 

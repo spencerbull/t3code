@@ -16,6 +16,7 @@ import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -45,6 +46,18 @@ export interface OmarchyThemePaths {
   readonly currentDir: string;
   readonly colorsPath: string;
   readonly namePath: string;
+}
+
+export class OmarchyThemeWatchError extends Schema.TaggedErrorClass<OmarchyThemeWatchError>()(
+  "OmarchyThemeWatchError",
+  {
+    path: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to watch the Omarchy theme state at ${this.path}.`;
+  }
 }
 
 interface OmarchyThemeFileStamp {
@@ -421,7 +434,7 @@ const make = (pathsOverride?: OmarchyThemePaths) =>
             });
             return watcher;
           },
-          catch: (cause) => (cause instanceof Error ? cause.message : String(cause)),
+          catch: (cause) => new OmarchyThemeWatchError({ path: stateRootDir, cause }),
         }),
         (watcher) => Effect.sync(() => watcher.close()),
       );
@@ -452,7 +465,7 @@ const make = (pathsOverride?: OmarchyThemePaths) =>
             yield* refresh.pipe(Effect.ignoreCause({ log: true }));
             yield* drainWatchEvents(watchEvents);
           }),
-        ).pipe(Effect.result);
+        ).pipe(Effect.tapError(Effect.logError), Effect.result);
         if (generation._tag === "Success") {
           delay = WATCH_REARM_MIN_DELAY;
         }
@@ -461,7 +474,10 @@ const make = (pathsOverride?: OmarchyThemePaths) =>
 
     const stateRootExists = yield* fs.exists(stateRootDir).pipe(Effect.orElseSucceed(() => false));
     if (stateRootExists) {
-      const watchEvents = yield* openWatchQueue().pipe(Effect.option);
+      const watchEvents = yield* openWatchQueue().pipe(
+        Effect.tapError(Effect.logError),
+        Effect.option,
+      );
       yield* Effect.gen(function* () {
         if (Option.isSome(watchEvents)) {
           yield* drainWatchEvents(watchEvents.value);

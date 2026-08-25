@@ -47,6 +47,7 @@ describe("host theme appearance choice", () => {
       label: "Follow system theme",
       description: "Use Dracula from the active environment.",
       actionLabel: "Use",
+      actionAriaLabel: "Use system theme from the active environment",
       actionPressed: false,
     });
   });
@@ -56,6 +57,7 @@ describe("host theme appearance choice", () => {
       label: "Follow system theme",
       description: "Use Dracula from the active environment.",
       actionLabel: "Following",
+      actionAriaLabel: "Following system theme from the active environment, currently active",
       actionPressed: true,
     });
   });

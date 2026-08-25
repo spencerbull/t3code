@@ -5,6 +5,7 @@ import {
   type HostThemeRefreshResult,
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -24,7 +25,6 @@ const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
 export class ThemeRefreshDeclaredResponseError extends Schema.TaggedErrorClass<ThemeRefreshDeclaredResponseError>()(
   "ThemeRefreshDeclaredResponseError",
   {
-    operation: Schema.Literal("requestHostThemeRefresh"),
     code: Schema.String,
     traceId: Schema.String,
     cause: Schema.Defect(),
@@ -38,7 +38,6 @@ export class ThemeRefreshDeclaredResponseError extends Schema.TaggedErrorClass<T
 export class ThemeRefreshUndeclaredStatusError extends Schema.TaggedErrorClass<ThemeRefreshUndeclaredStatusError>()(
   "ThemeRefreshUndeclaredStatusError",
   {
-    operation: Schema.Literal("requestHostThemeRefresh"),
     status: Schema.Int,
     cause: Schema.Defect(),
   },
@@ -51,7 +50,6 @@ export class ThemeRefreshUndeclaredStatusError extends Schema.TaggedErrorClass<T
 export class ThemeRefreshRequestError extends Schema.TaggedErrorClass<ThemeRefreshRequestError>()(
   "ThemeRefreshRequestError",
   {
-    operation: Schema.Literal("requestHostThemeRefresh"),
     cause: Schema.Defect(),
   },
 ) {
@@ -71,7 +69,6 @@ export type ThemeRefreshError =
 export function themeRefreshErrorFromRequest(cause: unknown): ThemeRefreshError {
   if (isEnvironmentHttpCommonError(cause)) {
     return new ThemeRefreshDeclaredResponseError({
-      operation: "requestHostThemeRefresh",
       code: cause.code,
       traceId: cause.traceId,
       cause,
@@ -79,12 +76,11 @@ export function themeRefreshErrorFromRequest(cause: unknown): ThemeRefreshError 
   }
   if (HttpClientError.isHttpClientError(cause) && cause.response !== undefined) {
     return new ThemeRefreshUndeclaredStatusError({
-      operation: "requestHostThemeRefresh",
       status: cause.response.status,
       cause,
     });
   }
-  return new ThemeRefreshRequestError({ operation: "requestHostThemeRefresh", cause });
+  return new ThemeRefreshRequestError({ cause });
 }
 
 export function formatThemeRefreshOutput(result: HostThemeRefreshResult, json: boolean): string {
@@ -99,6 +95,11 @@ export function formatThemeRefreshOutput(result: HostThemeRefreshResult, json: b
   }
 }
 
+const THEME_CLI_LIVE_SERVER_TIMEOUT = Duration.seconds(10);
+
+const withThemeCliLiveServerTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(Effect.timeout(THEME_CLI_LIVE_SERVER_TIMEOUT));
+
 export const requestHostThemeRefresh = Effect.fn("theme.requestHostThemeRefresh")(function* (
   origin: string,
   bearerToken: string,
@@ -109,7 +110,7 @@ export const requestHostThemeRefresh = Effect.fn("theme.requestHostThemeRefresh"
       headers: { authorization: `Bearer ${bearerToken}` },
       payload: {},
     })
-    .pipe(Effect.mapError(themeRefreshErrorFromRequest));
+    .pipe(withThemeCliLiveServerTimeout, Effect.mapError(themeRefreshErrorFromRequest));
 });
 
 const withThemeCliSession = <A, E, R>(

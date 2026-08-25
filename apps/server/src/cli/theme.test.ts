@@ -5,10 +5,14 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@t3tools/shared/Net";
 import { EnvironmentInternalError } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
 import * as TestConsole from "effect/testing/TestConsole";
 import { Command } from "effect/unstable/cli";
 import {
@@ -116,6 +120,58 @@ describe("t3 theme refresh", () => {
     assert.equal(formatThemeRefreshOutput({ status: "updated" }, true), '{"status":"updated"}');
   });
 
+  it.effect("times out a live server that accepts the refresh request but never responds", () =>
+    Effect.acquireUseRelease(
+      Effect.callback<{
+        readonly origin: string;
+        readonly requestReceived: Promise<void>;
+        readonly server: NodeHttp.Server;
+      }>((resume) => {
+        let markRequestReceived!: () => void;
+        const requestReceived = new Promise<void>((resolve) => {
+          markRequestReceived = resolve;
+        });
+        const server = NodeHttp.createServer((request) => {
+          request.resume();
+          request.on("end", markRequestReceived);
+        });
+        server.listen(0, "127.0.0.1", () => {
+          const address = server.address();
+          if (address === null || typeof address === "string") {
+            resume(Effect.die(new Error("Expected a TCP address")));
+            return;
+          }
+          resume(
+            Effect.succeed({
+              origin: `http://127.0.0.1:${String(address.port)}`,
+              requestReceived,
+              server,
+            }),
+          );
+        });
+      }),
+      ({ origin, requestReceived }) =>
+        Effect.gen(function* () {
+          const errorFiber = yield* requestHostThemeRefresh(origin, "test-token").pipe(
+            Effect.provide(FetchHttpClient.layer),
+            Effect.flip,
+            Effect.forkScoped,
+          );
+          yield* Effect.promise(() => requestReceived);
+          yield* TestClock.adjust(Duration.seconds(10));
+          const error = yield* Fiber.join(errorFiber);
+
+          assert.instanceOf(error, ThemeRefreshRequestError);
+          assert.isTrue(Cause.isTimeoutError(error.cause));
+        }),
+      ({ server }) =>
+        Effect.callback<void>((resume) => {
+          server.closeAllConnections();
+          server.close(() => resume(Effect.void));
+        }),
+    ).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
   it("keeps declared server failures structural with their code and trace", () => {
     const cause = new EnvironmentInternalError({
       code: "internal_error",
@@ -126,7 +182,6 @@ describe("t3 theme refresh", () => {
     const error = themeRefreshErrorFromRequest(cause);
 
     assert.instanceOf(error, ThemeRefreshDeclaredResponseError);
-    assert.strictEqual(error.operation, "requestHostThemeRefresh");
     assert.strictEqual(error.code, "internal_error");
     assert.strictEqual(error.traceId, "trace-123");
     assert.strictEqual(
@@ -160,7 +215,6 @@ describe("t3 theme refresh", () => {
     const error = themeRefreshErrorFromRequest(cause);
 
     assert.instanceOf(error, ThemeRefreshRequestError);
-    assert.strictEqual(error.operation, "requestHostThemeRefresh");
     assert.strictEqual(error.message, "Failed to refresh the running server's host theme.");
     assert.strictEqual(error.cause, cause);
   });

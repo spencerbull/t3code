@@ -11,6 +11,7 @@ import * as Stream from "effect/Stream";
 
 import {
   OmarchyTheme,
+  OmarchyThemeWatchError,
   applyOmarchyLightModeMarker,
   applyOmarchyThemeCandidate,
   isOmarchyThemeMaterializationCoherent,
@@ -63,6 +64,20 @@ const theme = (revision: string, accent = "#bd93f9"): HostTheme => ({
 });
 
 describe("Omarchy theme parsing", () => {
+  it("preserves watcher registration causes and path context", () => {
+    const cause = new Error("watch unavailable");
+    const error = new OmarchyThemeWatchError({
+      path: "/home/test/.local/state/omarchy",
+      cause,
+    });
+
+    expect(error.path).toBe("/home/test/.local/state/omarchy");
+    expect(error.cause).toBe(cause);
+    expect(error.message).toBe(
+      "Failed to watch the Omarchy theme state at /home/test/.local/state/omarchy.",
+    );
+  });
+
   it("parses and normalizes the current flat colors.toml shape", () => {
     const parsed = parseOmarchyFlatColorsToml(flatColors);
     expect(parsed).not.toBeNull();
