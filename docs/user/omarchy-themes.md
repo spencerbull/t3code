@@ -2,9 +2,9 @@
 
 When T3 Code runs on an Omarchy host, the server automatically detects the host's current theme.
 Web and desktop clients can opt in from **Settings → Appearance → Follow system theme**. The option
-is hidden unless the active, connected environment currently exposes a host theme. This is a
-client-local choice: existing theme selections do not change, and each browser or desktop install
-chooses independently.
+is hidden when the active environment does not provide a host theme and stays available through
+brief disconnects. This is a client-local choice: existing theme selections do not change, and each
+browser or desktop install chooses independently.
 
 The palette follows the environment you are viewing: the thread or draft that is open, otherwise
 the active environment. Switching to an environment without an available

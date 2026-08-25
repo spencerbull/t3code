@@ -9,7 +9,7 @@ import {
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
-import type { EnvironmentId, HostTheme } from "@t3tools/contracts";
+import type { HostTheme } from "@t3tools/contracts";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { cn } from "../../lib/utils";
 import {
@@ -74,16 +74,6 @@ export function getHostThemeChoiceViewModel(hostTheme: HostTheme | null, selecte
     // theme cards; disabled is reserved for in-flight operations.
     actionPressed: selected,
   } as const;
-}
-
-export function resolveActiveEnvironmentHostTheme(
-  environmentId: EnvironmentId | null,
-  connected: boolean,
-  serverConfigs: ReadonlyMap<EnvironmentId, { readonly hostTheme?: HostTheme }>,
-): HostTheme | null {
-  return environmentId === null || !connected
-    ? null
-    : (serverConfigs.get(environmentId)?.hostTheme ?? null);
 }
 
 function collectionVariantLabels(themes: ReadonlyArray<ThemeDefinition>): ReadonlyArray<string> {

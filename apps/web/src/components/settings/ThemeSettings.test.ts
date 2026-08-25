@@ -1,7 +1,6 @@
-import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { getHostThemeChoiceViewModel, resolveActiveEnvironmentHostTheme } from "./ThemeSettings";
+import { getHostThemeChoiceViewModel } from "./ThemeSettings";
 
 const hostTheme = {
   source: "omarchy",
@@ -21,29 +20,13 @@ const hostTheme = {
     cyan: "#8be9fd",
   },
 } as const;
-const environmentId = EnvironmentId.make("environment-a");
-
 describe("host theme appearance choice", () => {
   it("is absent when the active environment does not expose a host theme", () => {
-    expect(resolveActiveEnvironmentHostTheme(null, true, new Map())).toBeNull();
-    expect(resolveActiveEnvironmentHostTheme(environmentId, true, new Map())).toBeNull();
-    expect(
-      resolveActiveEnvironmentHostTheme(
-        environmentId,
-        false,
-        new Map([[environmentId, { hostTheme }]]),
-      ),
-    ).toBeNull();
     expect(getHostThemeChoiceViewModel(null, false)).toBeNull();
   });
 
   it("uses neutral copy when the active environment exposes a host theme", () => {
-    const activeHostTheme = resolveActiveEnvironmentHostTheme(
-      environmentId,
-      true,
-      new Map([[environmentId, { hostTheme }]]),
-    );
-    expect(getHostThemeChoiceViewModel(activeHostTheme, false)).toEqual({
+    expect(getHostThemeChoiceViewModel(hostTheme, false)).toEqual({
       label: "Follow system theme",
       description: "Use Dracula from the active environment.",
       actionLabel: "Use",
