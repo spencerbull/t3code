@@ -39,6 +39,7 @@ import {
   PullRequestOperationError,
   PullRequestUnavailableError,
 } from "./pullRequest.ts";
+import { HostThemeRefreshResult } from "./server.ts";
 import {
   RelayCloudEnvironmentHealthRequest,
   RelayCloudMintCredentialRequest,
@@ -546,6 +547,15 @@ export class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullReque
   }).middleware(EnvironmentAuthenticatedAuth),
 ) {}
 
+export class EnvironmentServerHttpApi extends HttpApiGroup.make("server").add(
+  HttpApiEndpoint.post("refreshHostTheme", "/api/server/theme/refresh", {
+    headers: OptionalBearerHeaders,
+    payload: Schema.Struct({}),
+    success: HostThemeRefreshResult,
+    error: EnvironmentScopedOperationErrors,
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
+
 export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
   .add(
     HttpApiEndpoint.post("linkProof", "/api/connect/link-proof", {
@@ -612,4 +622,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
+  .add(EnvironmentServerHttpApi)
   .add(EnvironmentConnectHttpApi) {}

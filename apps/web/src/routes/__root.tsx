@@ -7,6 +7,7 @@ import {
   type ErrorComponentProps,
   useLocation,
   useNavigate,
+  useParams,
 } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
@@ -39,20 +40,29 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { useUiStateStore } from "../uiStateStore";
-import { syncBrowserChromeTheme } from "../hooks/useTheme";
+import { syncBrowserChromeTheme, syncOmarchyHostTheme } from "../hooks/useTheme";
+import { getOmarchyHostThemeEnvironmentId } from "../themePalette";
+import { useComposerDraftStore } from "../composerDraftStore";
+import { resolveThreadRouteTarget } from "../threadRoutes";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
+import { resolveHostThemeSyncTarget } from "./hostThemeSync";
 import { shellEnvironment } from "../state/shell";
 import { useAtomValue } from "@effect/atom-react";
 import { useAtomCommand } from "../state/use-atom-command";
-import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
+import { useEnvironment, useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   primaryServerConfigAtom,
   primaryServerConfigEventAtom,
   primaryServerWelcomeAtom,
 } from "../state/server";
-import { readProject, setActiveEnvironmentId, useActiveEnvironmentId } from "../state/entities";
+import {
+  readProject,
+  setActiveEnvironmentId,
+  useActiveEnvironmentId,
+  useServerConfigs,
+} from "../state/entities";
 import {
   createKeybindingsUpdateToastController,
   type KeybindingsUpdateToastController,
@@ -135,6 +145,7 @@ function RootRouteView() {
         <ContrastAppearanceSync />
         <GlassAppearanceSync />
         <FontAppearanceSync />
+        <HostThemeSync />
         {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
         <RelayClientInstallDialog />
         <ConnectOnboardingDialog />
@@ -152,6 +163,41 @@ function RootRouteView() {
       </AnchoredToastProvider>
     </ToastProvider>
   );
+}
+
+function HostThemeSync() {
+  const activeEnvironmentId = useActiveEnvironmentId();
+  const serverConfigs = useServerConfigs();
+  const routeTarget = useParams({
+    strict: false,
+    select: (params) => resolveThreadRouteTarget(params),
+  });
+  const activeDraftSession = useComposerDraftStore((store) =>
+    routeTarget?.kind === "draft" ? store.getDraftSession(routeTarget.draftId) : null,
+  );
+  const routedEnvironmentId =
+    routeTarget?.kind === "server"
+      ? routeTarget.threadRef.environmentId
+      : (activeDraftSession?.environmentId ?? null);
+  const themeEnvironmentId = routedEnvironmentId ?? activeEnvironmentId;
+  const themeEnvironment = useEnvironment(themeEnvironmentId);
+  const activeConfig =
+    themeEnvironmentId === null ? undefined : serverConfigs.get(themeEnvironmentId);
+
+  useEffect(() => {
+    const target = resolveHostThemeSyncTarget({
+      environmentId: themeEnvironmentId,
+      hostTheme:
+        themeEnvironment?.connection.phase !== "connected" || activeConfig === undefined
+          ? undefined
+          : (activeConfig.hostTheme ?? null),
+      cachedEnvironmentId: getOmarchyHostThemeEnvironmentId(),
+    });
+    if (target === null) return;
+    syncOmarchyHostTheme(target.environmentId, target.hostTheme);
+  }, [activeConfig, themeEnvironment, themeEnvironmentId]);
+
+  return null;
 }
 
 function ContrastAppearanceSync() {

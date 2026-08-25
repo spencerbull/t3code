@@ -1,3 +1,4 @@
+import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { BUILT_IN_THEMES } from "@t3tools/shared/themePalettes";
 
@@ -39,7 +40,34 @@ import {
   themeColorToHex,
   toCanonicalThemeColor,
   THEME_FILE_VERSION,
+  OMARCHY_THEME_CACHE_STORAGE_KEY,
+  OMARCHY_THEME_ID,
+  OMARCHY_THEME_LABEL,
+  cacheSelectedOmarchyHostTheme,
+  createOmarchyThemeColors,
+  readCachedOmarchyHostTheme,
+  setOmarchyHostTheme,
 } from "./themePalette";
+
+const OMARCHY_HOST_THEME = {
+  source: "omarchy",
+  name: "Dracula",
+  appearance: "dark",
+  revision: "a".repeat(64),
+  colors: {
+    background: "#282a36",
+    foreground: "#f8f8f2",
+    accent: "#bd93f9",
+    selection: "#44475a",
+    red: "#ff5555",
+    green: "#50fa7b",
+    yellow: "#f1fa8c",
+    blue: "#6272a4",
+    magenta: "#ff79c6",
+    cyan: "#8be9fd",
+  },
+} as const;
+const OMARCHY_ENVIRONMENT_ID = EnvironmentId.make("environment-omarchy");
 
 function asHex(value: string): string {
   const hex = themeColorToHex(value);
@@ -79,6 +107,80 @@ function contrastRatio(first: string, second: string): number {
 }
 
 describe("theme files", () => {
+  it("uses an internal host ID that cannot collide with imported Omarchy themes", () => {
+    const imported = parseThemeFile({
+      version: THEME_FILE_VERSION,
+      name: "Omarchy",
+      appearance: "dark",
+      colors: { canvas: "#101010", accent: "#f0f0f0" },
+    });
+
+    expect(imported.id).toBe("omarchy");
+    expect(OMARCHY_THEME_ID).toBe("host:omarchy");
+    expect(imported.id).not.toBe(OMARCHY_THEME_ID);
+  });
+
+  it("keeps the Omarchy runtime palette separate and expands every color role", () => {
+    try {
+      expect(setOmarchyHostTheme(OMARCHY_ENVIRONMENT_ID, OMARCHY_HOST_THEME)).toBe(true);
+      expect(setOmarchyHostTheme(OMARCHY_ENVIRONMENT_ID, { ...OMARCHY_HOST_THEME })).toBe(false);
+      const definition = getThemeDefinition(OMARCHY_THEME_ID);
+      const colors = createOmarchyThemeColors(OMARCHY_HOST_THEME);
+
+      expect(definition).toMatchObject({ id: OMARCHY_THEME_ID, appearance: "dark" });
+      expect(Object.keys(colors).sort()).toEqual(Object.keys(T3_CHAT_THEME.colors).sort());
+      expect(asHex(colors.text)).toBe(OMARCHY_HOST_THEME.colors.foreground);
+      expect(asHex(colors.error)).toBe(OMARCHY_HOST_THEME.colors.red);
+      expect(asHex(colors.warning)).toBe(OMARCHY_HOST_THEME.colors.yellow);
+      expect(asHex(colors.update)).toBe(OMARCHY_HOST_THEME.colors.green);
+      expect(asHex(colors.messageAction)).toBe(OMARCHY_HOST_THEME.colors.magenta);
+      expect(asHex(colors.terminalCursor)).toBe(OMARCHY_HOST_THEME.colors.cyan);
+      expect(getCustomThemes()).not.toContainEqual(
+        expect.objectContaining({ id: OMARCHY_THEME_ID }),
+      );
+      expect(
+        setOmarchyHostTheme(OMARCHY_ENVIRONMENT_ID, {
+          ...OMARCHY_HOST_THEME,
+          colors: { ...OMARCHY_HOST_THEME.colors, accent: "#ff79c6" },
+        }),
+      ).toBe(true);
+    } finally {
+      setOmarchyHostTheme(null, null);
+    }
+  });
+
+  it("uses neutral copy for the system host theme", () => {
+    expect(OMARCHY_THEME_LABEL).toBe("Follow system theme");
+  });
+
+  it("caches the host palette only for the selected host-theme preference", () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => stored.get(key) ?? null,
+        removeItem: (key: string) => stored.delete(key),
+        setItem: (key: string, value: string) => stored.set(key, value),
+      },
+    });
+    try {
+      setOmarchyHostTheme(OMARCHY_ENVIRONMENT_ID, OMARCHY_HOST_THEME);
+      cacheSelectedOmarchyHostTheme(false);
+      expect(stored.has(OMARCHY_THEME_CACHE_STORAGE_KEY)).toBe(false);
+
+      cacheSelectedOmarchyHostTheme(true);
+      expect(readCachedOmarchyHostTheme()).toEqual({
+        environmentId: OMARCHY_ENVIRONMENT_ID,
+        theme: OMARCHY_HOST_THEME,
+      });
+
+      cacheSelectedOmarchyHostTheme(false);
+      expect(stored.has(OMARCHY_THEME_CACHE_STORAGE_KEY)).toBe(false);
+    } finally {
+      setOmarchyHostTheme(null, null);
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps every built-in palette value in canonical OKLCH form", () => {
     for (const theme of BUILT_IN_THEMES) {
       for (const colors of [theme.colors, ...Object.values(theme.variants ?? {})]) {

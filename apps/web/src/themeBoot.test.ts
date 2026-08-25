@@ -13,6 +13,8 @@ import {
   GROVE_THEME,
   IRIS_THEME,
   OCEAN_THEME,
+  OMARCHY_THEME_CACHE_STORAGE_KEY,
+  OMARCHY_THEME_ID,
   THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
   toCanonicalThemeColor,
@@ -147,6 +149,25 @@ const CHARCOAL_DARK_ONLY = {
   appearance: "dark",
   colors: { canvas: "#1c1210", text: "#ffe8d9", accent: "#ff7a45" },
 };
+const OMARCHY_HOST_THEME = {
+  source: "omarchy",
+  name: "Dracula",
+  appearance: "dark",
+  revision: "a".repeat(64),
+  colors: {
+    background: "#282a36",
+    foreground: "#f8f8f2",
+    accent: "#bd93f9",
+    selection: "#44475a",
+    red: "#ff5555",
+    green: "#50fa7b",
+    yellow: "#f1fa8c",
+    blue: "#6272a4",
+    magenta: "#ff79c6",
+    cyan: "#8be9fd",
+  },
+};
+const OMARCHY_ENVIRONMENT_ID = "environment-omarchy";
 
 describe("index.html boot script", () => {
   const parityCases: ReadonlyArray<{
@@ -279,6 +300,44 @@ describe("index.html boot script", () => {
     expect(aurora.backgroundColor).toBe(DEFAULT_DARK_CHROME);
     expect(aurora.bootVariables["--boot-background"]).toBe(AURORA_DUAL.variants.dark.canvas);
     expect(aurora.metaContent).toBe(DEFAULT_DARK_CHROME);
+  });
+
+  it("uses the dedicated selected Omarchy cache before React mounts", () => {
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: OMARCHY_THEME_ID,
+        [OMARCHY_THEME_CACHE_STORAGE_KEY]: JSON.stringify({
+          environmentId: OMARCHY_ENVIRONMENT_ID,
+          theme: OMARCHY_HOST_THEME,
+        }),
+      },
+      prefersDark: false,
+    });
+
+    expect(boot.themeId).toBe(OMARCHY_THEME_ID);
+    expect(boot.isDark).toBe(true);
+    expect(boot.backgroundColor).toBe(OMARCHY_HOST_THEME.colors.background);
+    expect(boot.bootVariables).toMatchObject({
+      "--boot-background": OMARCHY_HOST_THEME.colors.background,
+      "--boot-foreground": OMARCHY_HOST_THEME.colors.foreground,
+      "--boot-accent": OMARCHY_HOST_THEME.colors.accent,
+    });
+  });
+
+  it("ignores the Omarchy cache when another preference is selected", () => {
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: "light",
+        [OMARCHY_THEME_CACHE_STORAGE_KEY]: JSON.stringify({
+          environmentId: OMARCHY_ENVIRONMENT_ID,
+          theme: OMARCHY_HOST_THEME,
+        }),
+      },
+      prefersDark: false,
+    });
+
+    expect(boot.themeId).toBeUndefined();
+    expect(boot.backgroundColor).toBe("#ffffff");
   });
 
   it("accepts exponent-form OKLCH before the runtime mounts", () => {

@@ -417,6 +417,41 @@ export const ServerSignalProcessResult = Schema.Struct({
 });
 export type ServerSignalProcessResult = typeof ServerSignalProcessResult.Type;
 
+const HostThemeHexColor = Schema.String.check(Schema.isPattern(/^#[0-9a-f]{6}$/));
+
+/**
+ * Server-owned semantic colors for a materialized host theme. These are
+ * intentionally seeds rather than a serialized editor theme: clients derive
+ * their own complete role palette from this small, stable contract.
+ */
+export const HostThemePalette = Schema.Struct({
+  background: HostThemeHexColor,
+  foreground: HostThemeHexColor,
+  accent: HostThemeHexColor,
+  selection: HostThemeHexColor,
+  red: HostThemeHexColor,
+  green: HostThemeHexColor,
+  yellow: HostThemeHexColor,
+  blue: HostThemeHexColor,
+  magenta: HostThemeHexColor,
+  cyan: HostThemeHexColor,
+});
+export type HostThemePalette = typeof HostThemePalette.Type;
+
+export const HostTheme = Schema.Struct({
+  source: Schema.Literal("omarchy"),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  appearance: Schema.Literals(["light", "dark"]),
+  revision: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
+  colors: HostThemePalette,
+});
+export type HostTheme = typeof HostTheme.Type;
+
+export const HostThemeRefreshResult = Schema.Struct({
+  status: Schema.Literals(["updated", "unchanged", "unavailable"]),
+});
+export type HostThemeRefreshResult = typeof HostThemeRefreshResult.Type;
+
 export const ServerConfig = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
@@ -436,6 +471,8 @@ export const ServerConfig = Schema.Struct({
   remoteOpenTargets: Schema.optionalKey(ForwardCompatibleArray(RemoteOpenTarget)),
   observability: ServerObservability,
   settings: ServerSettings,
+  /** Materialized theme owned by the server host, absent on unsupported hosts. */
+  hostTheme: Schema.optionalKey(HostTheme),
   /** Whether shell subscriptions can emit an opt-in catch-up completion marker. */
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /** Whether thread subscriptions can emit an opt-in catch-up completion marker. */

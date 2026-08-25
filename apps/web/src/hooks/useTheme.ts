@@ -1,21 +1,25 @@
-import type { DesktopBridge } from "@t3tools/contracts";
+import type { DesktopBridge, EnvironmentId, HostTheme } from "@t3tools/contracts";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import {
   applyThemePalette,
+  cacheSelectedOmarchyHostTheme,
   CUSTOM_THEMES_STORAGE_KEY,
   invalidateCustomThemes,
   canonicalThemePreference,
   isKnownThemePreference,
   getThemePreferenceMode,
+  getOmarchyHostTheme,
   parseThemeHalves,
   resolveDesktopTheme,
   resolveThemeAppearance,
   resolveThemeHalf,
+  setOmarchyHostTheme,
   THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
   THEME_HALVES_STORAGE_KEY,
+  OMARCHY_THEME_ID,
   ThemePreference,
   type ThemeAppearance,
   type ThemeHalves,
@@ -29,6 +33,7 @@ type ThemeSnapshot = {
   followSystem: boolean;
   appearanceMode: ThemePreferenceMode;
   themeHalves: ThemeHalves | null;
+  hostTheme: HostTheme | null;
 };
 
 type DesktopThemeBridge = Pick<DesktopBridge, "setTheme">;
@@ -41,6 +46,7 @@ const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
   followSystem: true,
   appearanceMode: "system",
   themeHalves: null,
+  hostTheme: null,
 };
 
 /** Live read of the stored appearance mix, for callers that must not rely on
@@ -293,7 +299,8 @@ function applyTheme(theme: Theme, suppressTransitions = false) {
     lastAppliedTheme.systemDark === systemDark &&
     lastAppliedTheme.followSystem === followSystem &&
     lastAppliedTheme.appearanceMode === appearanceMode &&
-    themeHalvesSignature(lastAppliedTheme.themeHalves) === themeHalvesSignature(themeHalves)
+    themeHalvesSignature(lastAppliedTheme.themeHalves) === themeHalvesSignature(themeHalves) &&
+    lastAppliedTheme.hostTheme === getOmarchyHostTheme()
   ) {
     syncDesktopTheme(theme, followSystem, appearanceMode);
     return;
@@ -312,7 +319,14 @@ function applyTheme(theme: Theme, suppressTransitions = false) {
   applyThemePalette(resolveThemeHalf(theme, themeHalves, resolvedAppearance), resolvedAppearance);
   const isDark = resolvedAppearance === "dark";
   document.documentElement.classList.toggle("dark", isDark);
-  lastAppliedTheme = { theme, systemDark, followSystem, appearanceMode, themeHalves };
+  lastAppliedTheme = {
+    theme,
+    systemDark,
+    followSystem,
+    appearanceMode,
+    themeHalves,
+    hostTheme: getOmarchyHostTheme(),
+  };
   syncBrowserChromeTheme();
   syncDesktopTheme(theme, followSystem, appearanceMode);
   if (suppressTransitions) {
@@ -371,7 +385,12 @@ export function syncDesktopTheme(
 
 // Apply immediately on module load to prevent flash
 if (typeof document !== "undefined" && typeof window !== "undefined") {
-  applyTheme(getStored());
+  const storedTheme = getStored();
+  if (storedTheme !== OMARCHY_THEME_ID) {
+    setOmarchyHostTheme(null, null);
+    cacheSelectedOmarchyHostTheme(false);
+  }
+  applyTheme(storedTheme);
 }
 
 function getSnapshot(): ThemeSnapshot {
@@ -385,6 +404,7 @@ function getSnapshot(): ThemeSnapshot {
   const followSystem = appearanceMode === "system";
   const systemDark = followSystem ? getSystemDark() : false;
   const themeHalves = readStoredThemeHalves();
+  const hostTheme = getOmarchyHostTheme();
 
   if (
     lastSnapshot &&
@@ -392,12 +412,13 @@ function getSnapshot(): ThemeSnapshot {
     lastSnapshot.systemDark === systemDark &&
     lastSnapshot.followSystem === followSystem &&
     lastSnapshot.appearanceMode === appearanceMode &&
-    themeHalvesSignature(lastSnapshot.themeHalves) === themeHalvesSignature(themeHalves)
+    themeHalvesSignature(lastSnapshot.themeHalves) === themeHalvesSignature(themeHalves) &&
+    lastSnapshot.hostTheme === hostTheme
   ) {
     return lastSnapshot;
   }
 
-  lastSnapshot = { theme, systemDark, followSystem, appearanceMode, themeHalves };
+  lastSnapshot = { theme, systemDark, followSystem, appearanceMode, themeHalves, hostTheme };
   return lastSnapshot;
 }
 
@@ -414,7 +435,9 @@ function handleSystemAppearanceChange() {
 function handleStorageChange(e: StorageEvent) {
   if (e.key === STORAGE_KEY) {
     themeStorageReadFailure = null;
-    applyTheme(getStored(), true);
+    const theme = getStored();
+    cacheSelectedOmarchyHostTheme(theme === OMARCHY_THEME_ID);
+    applyTheme(theme, true);
     emitChange();
   } else if (e.key === THEME_FOLLOW_SYSTEM_STORAGE_KEY) {
     applyTheme(getStored(), true);
@@ -484,6 +507,7 @@ export function useTheme() {
       window.localStorage.removeItem(THEME_HALVES_STORAGE_KEY);
       try {
         writeThemePreference(next);
+        cacheSelectedOmarchyHostTheme(next === OMARCHY_THEME_ID);
       } catch (cause) {
         if (previousHalvesRaw !== null) {
           try {
@@ -619,7 +643,7 @@ export function useTheme() {
   // Keep DOM in sync on mount/change
   useEffect(() => {
     applyTheme(theme);
-  }, [snapshot.appearanceMode, theme]);
+  }, [snapshot.appearanceMode, snapshot.hostTheme, theme]);
 
   return {
     theme,
@@ -633,5 +657,20 @@ export function useTheme() {
     appearanceMode: snapshot.appearanceMode,
     resolvedTheme,
     themeHalves: snapshot.themeHalves,
+    omarchyHostTheme: snapshot.hostTheme,
   } as const;
+}
+
+/** Apply the active environment's host palette and repaint only when its identity changed. */
+export function syncOmarchyHostTheme(
+  environmentId: EnvironmentId | null,
+  next: HostTheme | null,
+): void {
+  const changed = setOmarchyHostTheme(environmentId, next);
+  if (!changed) return;
+  const storedTheme = getStored();
+  cacheSelectedOmarchyHostTheme(storedTheme === OMARCHY_THEME_ID);
+  lastAppliedTheme = null;
+  applyTheme(storedTheme, true);
+  emitChange();
 }

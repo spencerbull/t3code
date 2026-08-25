@@ -38,6 +38,7 @@ import {
   projectServerWelcome,
   resolveServerConfigValue,
   resolveServerUpdateProgressResult,
+  serverConfigForPersistence,
   serverUpdateStateForProgressEvent,
   serverUpdateStateForServerVersion,
   validateServerUpdateReadyEvent,
@@ -304,6 +305,33 @@ describe("server state projection", () => {
     const result = Option.getOrThrow(projected);
     expect(result.config.settings).toBe(settings);
     expect(result.latestEvent.type).toBe("settingsUpdated");
+  });
+
+  it("preserves the optional host theme in live snapshots but omits it from persistence", () => {
+    const hostTheme = {
+      source: "omarchy",
+      name: "Dracula",
+      appearance: "dark",
+      revision: "a".repeat(64),
+      colors: {
+        background: "#282a36",
+        foreground: "#f8f8f2",
+        accent: "#bd93f9",
+        selection: "#44475a",
+        red: "#ff5555",
+        green: "#50fa7b",
+        yellow: "#f1fa8c",
+        blue: "#6272a4",
+        magenta: "#ff79c6",
+        cyan: "#8be9fd",
+      },
+    } as const;
+    const config = { ...CONFIG, hostTheme };
+    const projected = applyServerConfigProjection(Option.none(), snapshotEvent(config));
+
+    expect(Option.getOrThrow(projected).config.hostTheme).toEqual(hostTheme);
+    expect(serverConfigForPersistence(config)).not.toHaveProperty("hostTheme");
+    expect(config.hostTheme).toEqual(hostTheme);
   });
 
   it("retains welcome when a ready event follows in the same stream chunk", () => {

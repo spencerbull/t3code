@@ -324,10 +324,18 @@ const cachedConfigSnapshotEvent = (config: ServerConfig): ServerConfigStreamEven
   config,
 });
 
+/** Host appearance is a live capability; the dedicated selected-theme cache owns boot continuity. */
+export function serverConfigForPersistence(config: ServerConfig): ServerConfig {
+  if (config.hostTheme === undefined) return config;
+  const persisted = { ...config };
+  Reflect.deleteProperty(persisted, "hostTheme");
+  return persisted;
+}
+
 /**
- * Keeps a complete server configuration available during reconnects. Server
- * config carries the provider/model catalogue used by task creation, so it is
- * useful—and safe—to retain after a transport session ends.
+ * Keeps durable server configuration available during reconnects. Server config
+ * carries the provider/model catalogue used by task creation, while live-only
+ * capabilities are removed before persistence.
  */
 export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConfigState.make")(
   function* () {
@@ -335,6 +343,7 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
     const cache = yield* EnvironmentCacheStore;
     const environmentId = supervisor.target.environmentId;
     const cachedConfig = yield* cache.loadServerConfig(environmentId).pipe(
+      Effect.map(Option.map(serverConfigForPersistence)),
       Effect.catch((error) =>
         Effect.logWarning("Could not load cached server configuration.").pipe(
           Effect.annotateLogs({
@@ -358,7 +367,7 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
     const persist = Effect.fn("EnvironmentServerConfigState.persist")(function* (
       config: ServerConfig,
     ) {
-      return yield* cache.saveServerConfig(environmentId, config).pipe(
+      return yield* cache.saveServerConfig(environmentId, serverConfigForPersistence(config)).pipe(
         Effect.as(true),
         Effect.catch((error) =>
           Effect.logWarning("Could not persist cached server configuration.").pipe(

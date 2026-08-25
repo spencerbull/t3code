@@ -23,6 +23,7 @@ import {
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitManagerServiceError,
+  type HostTheme,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
@@ -89,6 +90,7 @@ import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as OmarchyTheme from "./omarchyTheme.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -443,6 +445,7 @@ const makeWsRpcLayer = (
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
+      const omarchyTheme = yield* OmarchyTheme.OmarchyTheme;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
@@ -1078,47 +1081,52 @@ const makeWsRpcLayer = (
           );
       };
 
-      const loadServerConfig = Effect.gen(function* () {
-        const keybindingsConfig = yield* keybindings.loadConfigState;
-        const providers = yield* providerRegistry.getProviders;
-        const settings = ServerSettings.redactServerSettingsForClient(
-          yield* serverSettings.getSettings,
-        );
-        const environment = yield* serverEnvironment.getDescriptor;
-        const auth = yield* serverAuth.getDescriptor();
+      const loadServerConfig = (hostThemeOverride?: Option.Option<HostTheme>) =>
+        Effect.gen(function* () {
+          const keybindingsConfig = yield* keybindings.loadConfigState;
+          const providers = yield* providerRegistry.getProviders;
+          const settings = ServerSettings.redactServerSettingsForClient(
+            yield* serverSettings.getSettings,
+          );
+          const environment = yield* serverEnvironment.getDescriptor;
+          const auth = yield* serverAuth.getDescriptor();
+          const hostTheme = hostThemeOverride ?? (yield* omarchyTheme.get);
 
-        return {
-          environment,
-          auth,
-          cwd: config.cwd,
-          keybindingsConfigPath: config.keybindingsConfigPath,
-          keybindings: keybindingsConfig.keybindings,
-          issues: keybindingsConfig.issues,
-          providers,
-          availableEditors: yield* resolveAvailableEditorsForConfig(
-            externalLauncher.resolveAvailableEditors(),
-          ),
-          // Same discovery-with-timeout treatment as editors: a slow probe
-          // must not stall server.getConfig, so it degrades to no targets.
-          remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
-            remoteOpenTargets.resolveTargets(),
-          ),
-          observability: {
-            logsDirectoryPath: config.logsDir,
-            localTracingEnabled: true,
-            ...(config.otlpTracesUrl !== undefined ? { otlpTracesUrl: config.otlpTracesUrl } : {}),
-            otlpTracesEnabled: config.otlpTracesUrl !== undefined,
-            ...(config.otlpMetricsUrl !== undefined
-              ? { otlpMetricsUrl: config.otlpMetricsUrl }
-              : {}),
-            otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
-          },
-          settings,
-          shellResumeCompletionMarker: true,
-          threadResumeCompletionMarker: true,
-          threadSnapshotPagination: true,
-        };
-      });
+          return {
+            environment,
+            auth,
+            cwd: config.cwd,
+            keybindingsConfigPath: config.keybindingsConfigPath,
+            keybindings: keybindingsConfig.keybindings,
+            issues: keybindingsConfig.issues,
+            providers,
+            availableEditors: yield* resolveAvailableEditorsForConfig(
+              externalLauncher.resolveAvailableEditors(),
+            ),
+            // Same discovery-with-timeout treatment as editors: a slow probe
+            // must not stall server.getConfig, so it degrades to no targets.
+            remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
+              remoteOpenTargets.resolveTargets(),
+            ),
+            observability: {
+              logsDirectoryPath: config.logsDir,
+              localTracingEnabled: true,
+              ...(config.otlpTracesUrl !== undefined
+                ? { otlpTracesUrl: config.otlpTracesUrl }
+                : {}),
+              otlpTracesEnabled: config.otlpTracesUrl !== undefined,
+              ...(config.otlpMetricsUrl !== undefined
+                ? { otlpMetricsUrl: config.otlpMetricsUrl }
+                : {}),
+              otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
+            },
+            settings,
+            ...(Option.isSome(hostTheme) ? { hostTheme: hostTheme.value } : {}),
+            shellResumeCompletionMarker: true,
+            threadResumeCompletionMarker: true,
+            threadSnapshotPagination: true,
+          };
+        });
 
       const refreshGitStatus = (cwd: string) =>
         vcsStatusBroadcaster
@@ -1531,7 +1539,7 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.serverGetConfig]: (_input) =>
-          observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {
+          observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig(), {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.serverRefreshProviders]: (input) =>
@@ -2319,6 +2327,15 @@ const makeWsRpcLayer = (
                   payload: { settings },
                 })),
               );
+              const hostThemeSubscription = yield* omarchyTheme.subscribe;
+              const hostThemeUpdates = hostThemeSubscription.changes.pipe(
+                Stream.mapEffect((hostTheme) => loadServerConfig(Option.fromNullishOr(hostTheme))),
+                Stream.map((config) => ({
+                  version: 1 as const,
+                  type: "snapshot" as const,
+                  config,
+                })),
+              );
 
               yield* providerRegistry
                 .refresh()
@@ -2326,14 +2343,14 @@ const makeWsRpcLayer = (
 
               const liveUpdates = Stream.merge(
                 keybindingsUpdates,
-                Stream.merge(providerStatuses, settingsUpdates),
+                Stream.merge(providerStatuses, Stream.merge(settingsUpdates, hostThemeUpdates)),
               );
 
               return Stream.concat(
                 Stream.make({
                   version: 1 as const,
                   type: "snapshot" as const,
-                  config: yield* loadServerConfig,
+                  config: yield* loadServerConfig(hostThemeSubscription.latest),
                 }),
                 liveUpdates,
               );

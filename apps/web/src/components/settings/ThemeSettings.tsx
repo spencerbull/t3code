@@ -9,6 +9,7 @@ import {
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
+import type { EnvironmentId, HostTheme } from "@t3tools/contracts";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { cn } from "../../lib/utils";
 import {
@@ -24,6 +25,8 @@ import {
   GROVE_THEME,
   IRIS_THEME,
   OCEAN_THEME,
+  OMARCHY_THEME_ID,
+  OMARCHY_THEME_LABEL,
 } from "../../themePalette";
 import {
   AlertDialog,
@@ -57,6 +60,26 @@ const MAINTAINER_THEMES: ReadonlyArray<ThemeDefinition> = [
   EMBER_THEME,
   IRIS_THEME,
 ];
+
+export function getHostThemeChoiceViewModel(hostTheme: HostTheme | null, selected: boolean) {
+  if (hostTheme === null) return null;
+  return {
+    label: OMARCHY_THEME_LABEL,
+    description: `Use ${hostTheme.name} from the active environment.`,
+    actionLabel: selected ? "Following" : "Use",
+    actionDisabled: selected,
+  } as const;
+}
+
+export function resolveActiveEnvironmentHostTheme(
+  environmentId: EnvironmentId | null,
+  connected: boolean,
+  serverConfigs: ReadonlyMap<EnvironmentId, { readonly hostTheme?: HostTheme }>,
+): HostTheme | null {
+  return environmentId === null || !connected
+    ? null
+    : (serverConfigs.get(environmentId)?.hostTheme ?? null);
+}
 
 function collectionVariantLabels(themes: ReadonlyArray<ThemeDefinition>): ReadonlyArray<string> {
   if (themes.length === 0) return [];
@@ -509,6 +532,7 @@ export function ThemeLibrary({
   onImportOpenChange,
   themeHalves,
   setThemeHalf,
+  omarchyHostTheme,
 }: {
   theme: string;
   setTheme: (theme: string) => boolean;
@@ -521,6 +545,7 @@ export function ThemeLibrary({
   onImportOpenChange: (open: boolean) => void;
   themeHalves: ThemeHalves | null;
   setThemeHalf: (appearance: ThemeAppearance, themeId: string | null) => boolean;
+  omarchyHostTheme: HostTheme | null;
 }) {
   const openThemeEditor = useThemeEditorStore((store) => store.openThemeEditor);
   const [themeRemovalTarget, setThemeRemovalTarget] = useState<{
@@ -746,6 +771,31 @@ export function ThemeLibrary({
     </div>
   );
 
+  const renderOmarchyChoice = () => {
+    const isSelected = theme === OMARCHY_THEME_ID;
+    const choice = getHostThemeChoiceViewModel(omarchyHostTheme, isSelected);
+    if (choice === null) return null;
+    return (
+      <div className="mx-3 flex flex-col gap-3 rounded-xl border border-border/70 bg-card/60 p-3 sm:mx-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">{choice.label}</div>
+          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+            {choice.description}
+          </p>
+        </div>
+        <Button
+          className="shrink-0"
+          disabled={choice.actionDisabled}
+          size="xs"
+          variant={isSelected ? "secondary" : "outline"}
+          onClick={() => persistTheme(OMARCHY_THEME_ID)}
+        >
+          {choice.actionLabel}
+        </Button>
+      </div>
+    );
+  };
+
   const customThemeCollections = [
     ...customThemes
       .reduce((groups, customTheme) => {
@@ -855,6 +905,7 @@ export function ThemeLibrary({
         Color scheme
       </h3>
       {renderModeTiles()}
+      {renderOmarchyChoice()}
       <div className="flex min-h-8 flex-wrap items-center justify-between gap-3 px-3 pt-2 sm:px-4">
         <h3 className="text-sm font-medium tracking-[-0.005em] text-foreground">Themes</h3>
         <div className="flex flex-wrap items-center justify-end gap-2">

@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  HostTheme,
   ServerConfig,
   ServerProvider,
   ServerProviders,
@@ -12,6 +13,10 @@ const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
 const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
 const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
+const decodeHostTheme = Schema.decodeUnknownSync(HostTheme);
+const decodeHostThemeConfigFragment = Schema.decodeUnknownSync(
+  Schema.Struct({ hostTheme: Schema.optionalKey(HostTheme) }),
+);
 
 const baseProviderSnapshot = {
   instanceId: "codex",
@@ -118,6 +123,32 @@ describe("ServerProvider", () => {
 });
 
 describe("server config forward compatibility", () => {
+  it("decodes the optional canonical host theme contract", () => {
+    const hostTheme = decodeHostTheme({
+      source: "omarchy",
+      name: "Dracula",
+      appearance: "dark",
+      revision: "a".repeat(64),
+      colors: {
+        background: "#282a36",
+        foreground: "#f8f8f2",
+        accent: "#bd93f9",
+        selection: "#44475a",
+        red: "#ff5555",
+        green: "#50fa7b",
+        yellow: "#f1fa8c",
+        blue: "#bd93f9",
+        magenta: "#ff79c6",
+        cyan: "#8be9fd",
+      },
+    });
+
+    expect(hostTheme.name).toBe("Dracula");
+    expect(hostTheme.colors.accent).toBe("#bd93f9");
+    expect(decodeHostThemeConfigFragment({})).toEqual({});
+    expect(decodeHostThemeConfigFragment({ hostTheme })).toEqual({ hostTheme });
+  });
+
   it("drops config issues with kinds this build does not know", () => {
     const parsed = decodeUpsertKeybindingResult({
       keybindings: [],

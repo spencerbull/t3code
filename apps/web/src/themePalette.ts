@@ -2,6 +2,12 @@ import * as Schema from "effect/Schema";
 import "culori/css";
 import { converter, parse } from "culori/fn";
 import {
+  EnvironmentId as EnvironmentIdSchema,
+  HostTheme as HostThemeSchema,
+  type EnvironmentId,
+  type HostTheme,
+} from "@t3tools/contracts";
+import {
   BUILT_IN_THEMES,
   EMBER_THEME,
   GROVE_THEME,
@@ -34,6 +40,9 @@ export const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
 export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
 export const THEME_APPEARANCE_MODE_STORAGE_KEY = "t3code:theme-appearance-mode";
 export const THEME_HALVES_STORAGE_KEY = "t3code:theme-halves:v1";
+export const OMARCHY_THEME_ID = "host:omarchy" as const;
+export const OMARCHY_THEME_LABEL = "Follow system theme";
+export const OMARCHY_THEME_CACHE_STORAGE_KEY = "t3code:omarchy-theme:v1";
 
 const LEGACY_T3_CHAT_DARK_THEME_ID = "t3-chat-dark";
 
@@ -65,6 +74,7 @@ const RESERVED_THEME_IDS = new Set([
   OCEAN_THEME_ID,
   EMBER_THEME_ID,
   IRIS_THEME_ID,
+  OMARCHY_THEME_ID,
   LEGACY_T3_CHAT_DARK_THEME_ID,
   "t3-grove",
   "t3-ocean",
@@ -85,6 +95,77 @@ type CustomThemeLibrarySnapshot =
 let customThemeLibrarySnapshot: CustomThemeLibrarySnapshot | null = null;
 const themePreviewListeners = new Set<() => void>();
 let themePreviewSidebarArtwork: boolean | null = null;
+const OmarchyHostThemeCache = Schema.Struct({
+  environmentId: EnvironmentIdSchema,
+  theme: HostThemeSchema,
+});
+type OmarchyHostThemeCache = typeof OmarchyHostThemeCache.Type;
+const isOmarchyHostThemeCache = Schema.is(OmarchyHostThemeCache);
+
+export function readCachedOmarchyHostTheme(): OmarchyHostThemeCache | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(OMARCHY_THEME_CACHE_STORAGE_KEY);
+    if (raw === null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return isOmarchyHostThemeCache(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+const cachedOmarchyHostTheme = readCachedOmarchyHostTheme();
+let omarchyHostTheme: HostTheme | null = cachedOmarchyHostTheme?.theme ?? null;
+let omarchyHostThemeEnvironmentId: EnvironmentId | null =
+  cachedOmarchyHostTheme?.environmentId ?? null;
+
+export function getOmarchyHostTheme(): HostTheme | null {
+  return omarchyHostTheme;
+}
+
+export function getOmarchyHostThemeEnvironmentId(): EnvironmentId | null {
+  return omarchyHostThemeEnvironmentId;
+}
+
+/** Updates the active environment palette without mixing it into the custom-theme library. */
+export function setOmarchyHostTheme(
+  environmentId: EnvironmentId | null,
+  next: HostTheme | null,
+): boolean {
+  const unchanged =
+    omarchyHostThemeEnvironmentId === environmentId &&
+    (omarchyHostTheme === next ||
+      (omarchyHostTheme !== null &&
+        next !== null &&
+        omarchyHostTheme.revision === next.revision &&
+        omarchyHostTheme.name === next.name &&
+        omarchyHostTheme.appearance === next.appearance &&
+        JSON.stringify(omarchyHostTheme.colors) === JSON.stringify(next.colors)));
+  if (unchanged) return false;
+  omarchyHostThemeEnvironmentId = environmentId;
+  omarchyHostTheme = next;
+  return true;
+}
+
+/** The boot cache exists only while Follow system theme is the client-local selection. */
+export function cacheSelectedOmarchyHostTheme(selected: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (selected && omarchyHostThemeEnvironmentId !== null && omarchyHostTheme !== null) {
+      window.localStorage.setItem(
+        OMARCHY_THEME_CACHE_STORAGE_KEY,
+        JSON.stringify({
+          environmentId: omarchyHostThemeEnvironmentId,
+          theme: omarchyHostTheme,
+        } satisfies OmarchyHostThemeCache),
+      );
+    } else {
+      window.localStorage.removeItem(OMARCHY_THEME_CACHE_STORAGE_KEY);
+    }
+  } catch {
+    // Theme selection remains usable when storage is unavailable; only early boot continuity is lost.
+  }
+}
 
 export function getThemePreviewSidebarArtwork(): boolean | null {
   return themePreviewSidebarArtwork;
@@ -1419,8 +1500,48 @@ export function updateThemeColorFamily(
 
 const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = BUILT_IN_THEMES;
 
+/** Expand the compact server palette into every role used by the web renderer. */
+export function createOmarchyThemeColors(hostTheme: HostTheme): ThemeColors {
+  const { appearance, colors: semantic } = hostTheme;
+  let colors = createManagedThemeColors(appearance, semantic.background, semantic.accent, {
+    exactSeeds: true,
+  });
+  colors = updateThemeColorFamily(appearance, colors, "error", semantic.red);
+  colors = updateThemeColorFamily(appearance, colors, "warning", semantic.yellow);
+  colors = updateThemeColorFamily(appearance, colors, "messageAction", semantic.magenta);
+  colors = updateThemeColorFamily(appearance, colors, "sidebarRowSelected", semantic.selection);
+  const greenFamily = updateThemeColorFamily(appearance, colors, "accent", semantic.green);
+
+  return {
+    ...colors,
+    text: semantic.foreground,
+    toolbarForeground: semantic.foreground,
+    toolbarControlForeground: semantic.foreground,
+    codeForeground: semantic.foreground,
+    terminalForeground: semantic.foreground,
+    focus: semantic.blue,
+    update: greenFamily.update,
+    updateForeground: greenFamily.updateForeground,
+    updateSurface: greenFamily.updateSurface,
+    terminalCursor: semantic.cyan,
+    terminalSelection: semantic.selection,
+  };
+}
+
+export function getOmarchyThemeDefinition(): ThemeDefinition | null {
+  const hostTheme = getOmarchyHostTheme();
+  if (hostTheme === null) return null;
+  return {
+    id: OMARCHY_THEME_ID,
+    label: `${OMARCHY_THEME_LABEL} (${hostTheme.name})`,
+    appearance: hostTheme.appearance,
+    colors: createOmarchyThemeColors(hostTheme),
+  };
+}
+
 export function getThemeDefinition(theme: ThemePreference): ThemeDefinition | null {
   const themeId = themeIdFromPreference(theme);
+  if (themeId === OMARCHY_THEME_ID) return getOmarchyThemeDefinition();
   return (
     BUILT_IN_THEME_DEFINITIONS.find((definition) => definition.id === themeId) ??
     getCustomThemes().find((definition) => definition.id === themeId) ??
@@ -1934,6 +2055,7 @@ export function resolveDesktopTheme(
 
 export function isKnownThemePreference(theme: string): boolean {
   if (theme === "light" || theme === "dark" || theme === "system") return true;
+  if (theme === OMARCHY_THEME_ID) return true;
   return getThemeDefinition(theme) !== null;
 }
 

@@ -80,7 +80,8 @@ import {
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
 import { primaryServerObservabilityAtom, primaryServerProvidersAtom } from "../../state/server";
-import { useProjects } from "../../state/entities";
+import { useActiveEnvironmentId, useProjects, useServerConfigs } from "../../state/entities";
+import { useEnvironment } from "../../state/environments";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
@@ -119,7 +120,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { ThemeLibrary } from "./ThemeSettings";
+import { resolveActiveEnvironmentHostTheme, ThemeLibrary } from "./ThemeSettings";
 import {
   backgroundActivityOverrideSettings,
   backgroundActivitySharedPolicySettings,
@@ -985,6 +986,14 @@ export function AppearanceSettingsPanel() {
     theme,
     themeHalves,
   } = useTheme();
+  const activeEnvironmentId = useActiveEnvironmentId();
+  const activeEnvironment = useEnvironment(activeEnvironmentId);
+  const serverConfigs = useServerConfigs();
+  const hostTheme = resolveActiveEnvironmentHostTheme(
+    activeEnvironmentId,
+    activeEnvironment?.connection.phase === "connected",
+    serverConfigs,
+  );
   const customThemes = useCustomThemes();
   const [isImportThemeOpen, setIsImportThemeOpen] = useState(false);
   const settings = usePrimarySettings();
@@ -1014,6 +1023,7 @@ export function AppearanceSettingsPanel() {
             appearanceMode={appearanceMode}
             customThemes={customThemes}
             initialAppearance={resolvedTheme}
+            omarchyHostTheme={hostTheme}
             refreshTheme={refreshTheme}
             isImportOpen={isImportThemeOpen}
             setAppearanceMode={setAppearanceMode}

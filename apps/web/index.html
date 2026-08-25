@@ -18,6 +18,7 @@
         const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
         const THEME_APPEARANCE_MODE_STORAGE_KEY = "t3code:theme-appearance-mode";
         const THEME_HALVES_STORAGE_KEY = "t3code:theme-halves:v1";
+        const OMARCHY_THEME_CACHE_STORAGE_KEY = "t3code:omarchy-theme:v1";
         const SPLASH_COLORS = {
           light: {
             background: "#ffffff",
@@ -139,6 +140,7 @@
           "ocean",
           "ember",
           "iris",
+          "host:omarchy",
           "t3-chat-dark",
           "t3-grove",
           "t3-ocean",
@@ -215,6 +217,58 @@
             return null;
           }
         };
+        const readCachedOmarchyTheme = () => {
+          const isHex = (value) => typeof value === "string" && /^#[0-9a-f]{6}$/.test(value);
+          try {
+            const cached = JSON.parse(
+              window.localStorage.getItem(OMARCHY_THEME_CACHE_STORAGE_KEY) ?? "null",
+            );
+            const value = isRecord(cached) && isRecord(cached.theme) ? cached.theme : null;
+            const colors = isRecord(value) && isRecord(value.colors) ? value.colors : null;
+            const semanticRoles = [
+              "background",
+              "foreground",
+              "accent",
+              "selection",
+              "red",
+              "green",
+              "yellow",
+              "blue",
+              "magenta",
+              "cyan",
+            ];
+            if (
+              !isRecord(cached) ||
+              typeof cached.environmentId !== "string" ||
+              cached.environmentId.trim().length === 0 ||
+              cached.environmentId !== cached.environmentId.trim() ||
+              !isRecord(value) ||
+              value.source !== "omarchy" ||
+              typeof value.name !== "string" ||
+              value.name.trim().length === 0 ||
+              value.name.trim().length > 128 ||
+              !isThemeAppearance(value.appearance) ||
+              typeof value.revision !== "string" ||
+              !/^[0-9a-f]{64}$/.test(value.revision) ||
+              !colors ||
+              !semanticRoles.every((role) => isHex(colors[role]))
+            ) {
+              return null;
+            }
+            return {
+              id: "host:omarchy",
+              appearance: value.appearance,
+              colors: {
+                canvas: colors.background,
+                chrome: colors.background,
+                text: colors.foreground,
+                accent: colors.accent,
+              },
+            };
+          } catch {
+            return null;
+          }
+        };
 
         try {
           const storedTheme = window.localStorage.getItem("t3code:theme");
@@ -234,7 +288,13 @@
             storedTheme === null ? "" : (LEGACY_THEME_IDS[storedTheme] ?? storedTheme);
           const legacyMode = isLegacyT3ChatDark ? "dark" : null;
           const builtInModes = BUILT_IN_THEME_MODES[themeId] ?? null;
-          const customTheme = builtInModes ? null : findCustomTheme(themeId);
+          // The dedicated host cache is consulted only when Follow system theme is
+          // selected; it never joins the user custom-theme library.
+          const customTheme = builtInModes
+            ? null
+            : themeId === "host:omarchy"
+              ? readCachedOmarchyTheme()
+              : findCustomTheme(themeId);
           const themeModes =
             builtInModes ??
             (customTheme
@@ -247,6 +307,7 @@
             storedTheme === "light" ||
             storedTheme === "dark" ||
             storedTheme === "system" ||
+            storedTheme === "host:omarchy" ||
             themeModes !== null;
           const theme = isKnownTheme && storedTheme ? storedTheme : "system";
           const isThemed = isKnownTheme && themeModes !== null;

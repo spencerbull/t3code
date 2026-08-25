@@ -75,6 +75,24 @@ import * as Socket from "effect/unstable/socket/Socket";
 import { vi } from "vite-plus/test";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
+const TEST_HOST_THEME = {
+  source: "omarchy",
+  name: "Dracula",
+  appearance: "dark",
+  revision: "a".repeat(64),
+  colors: {
+    background: "#282a36",
+    foreground: "#f8f8f2",
+    accent: "#bd93f9",
+    selection: "#44475a",
+    red: "#ff5555",
+    green: "#50fa7b",
+    yellow: "#f1fa8c",
+    blue: "#6272a4",
+    magenta: "#ff79c6",
+    cyan: "#8be9fd",
+  },
+} as const;
 const decodeTransferThreadSnapshot = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationThreadDetailSnapshot),
 );
@@ -118,6 +136,7 @@ import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { ProviderAdapterRequestError } from "./provider/Errors.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as OmarchyTheme from "./omarchyTheme.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -411,6 +430,7 @@ const buildAppUnderTest = (options?: {
     checkpointDiffQuery?: Partial<CheckpointDiffQuery.CheckpointDiffQuery["Service"]>;
     browserTraceCollector?: Partial<BrowserTraceCollector.BrowserTraceCollector["Service"]>;
     serverLifecycleEvents?: Partial<ServerLifecycleEvents.ServerLifecycleEvents["Service"]>;
+    omarchyTheme?: Partial<OmarchyTheme.OmarchyTheme["Service"]>;
     serverRuntimeStartup?: Partial<ServerRuntimeStartup.ServerRuntimeStartup["Service"]>;
     serverEnvironment?: Partial<ServerEnvironment.ServerEnvironment["Service"]>;
     repositoryIdentityResolver?: Partial<
@@ -863,6 +883,14 @@ const buildAppUnderTest = (options?: {
           snapshot: Effect.succeed({ sequence: 0, events: [] }),
           stream: Stream.empty,
           ...options?.layers?.serverLifecycleEvents,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(OmarchyTheme.OmarchyTheme)({
+          get: Effect.succeed(Option.none()),
+          refresh: Effect.succeed({ status: "unavailable" }),
+          subscribe: Effect.succeed({ latest: Option.none(), changes: Stream.empty }),
+          ...options?.layers?.omarchyTheme,
         }),
       ),
       Layer.provide(
@@ -4712,6 +4740,86 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         type: "keybindingsUpdated",
         payload: { keybindings: [], issues: [] },
       });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("requires authentication for an empty host-theme refresh request", () =>
+    Effect.gen(function* () {
+      let refreshCalls = 0;
+      yield* buildAppUnderTest({
+        layers: {
+          omarchyTheme: {
+            refresh: Effect.sync(() => {
+              refreshCalls += 1;
+              return { status: "updated" as const };
+            }),
+          },
+        },
+      });
+
+      const unauthenticated = yield* HttpClient.post("/api/server/theme/refresh", {
+        body: yield* HttpBody.json({}),
+      });
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const authenticated = yield* HttpClient.post("/api/server/theme/refresh", {
+        headers: { authorization: `Bearer ${bearerToken}` },
+        body: yield* HttpBody.json({}),
+      });
+      const body = (yield* authenticated.json) as { readonly status: string };
+
+      assert.equal(unauthenticated.status, 401);
+      assert.equal(authenticated.status, 200);
+      assert.deepEqual(body, { status: "updated" });
+      assert.equal(refreshCalls, 1);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("streams host-theme updates and retraction as full config snapshots", () =>
+    Effect.gen(function* () {
+      const updatedTheme = {
+        ...TEST_HOST_THEME,
+        name: "Tokyo Night",
+        revision: "b".repeat(64),
+        colors: { ...TEST_HOST_THEME.colors, background: "#1a1b26" },
+      } as const;
+      const nextTheme = {
+        ...updatedTheme,
+        name: "Catppuccin",
+        revision: "c".repeat(64),
+        colors: { ...updatedTheme.colors, background: "#1e1e2e" },
+      } as const;
+      const changes = Stream.fromIterable([updatedTheme, null, nextTheme]);
+
+      yield* buildAppUnderTest({
+        layers: {
+          omarchyTheme: {
+            get: Effect.succeed(Option.some(TEST_HOST_THEME)),
+            subscribe: Effect.succeed({
+              latest: Option.some(TEST_HOST_THEME),
+              changes,
+            }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const events = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.subscribeServerConfig]({}).pipe(Stream.take(4), Stream.runCollect),
+        ),
+      );
+      const [initial, update, retraction, next] = Array.from(events);
+
+      assert.equal(initial?.type, "snapshot");
+      assert.equal(update?.type, "snapshot");
+      assert.equal(retraction?.type, "snapshot");
+      assert.equal(next?.type, "snapshot");
+      if (initial?.type === "snapshot") assert.deepEqual(initial.config.hostTheme, TEST_HOST_THEME);
+      if (update?.type === "snapshot") assert.deepEqual(update.config.hostTheme, updatedTheme);
+      if (retraction?.type === "snapshot") {
+        assert.equal("hostTheme" in retraction.config, false);
+      }
+      if (next?.type === "snapshot") assert.deepEqual(next.config.hostTheme, nextTheme);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
