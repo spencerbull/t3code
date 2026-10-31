@@ -19,6 +19,8 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { waitForAtomValue } from "./waitForAtomValue";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { isHostedStaticApp } from "../hostedPairing";
 
@@ -47,6 +49,15 @@ export function useEnvironmentShellHasSnapshot(environmentId: EnvironmentId | nu
       ? NO_SHELL_SNAPSHOT_ATOM
       : environmentShell.hasSnapshotAtom(environmentId),
   );
+}
+
+export function waitForEnvironmentShellSnapshot(environmentId: EnvironmentId): Promise<boolean> {
+  return waitForAtomValue({
+    registry: appAtomRegistry,
+    atom: environmentShell.statusAtom(environmentId),
+    predicate: (status) => status === "live",
+    timeoutMs: 10_000,
+  });
 }
 
 let previousLiveEnvironmentIds: ReadonlySet<EnvironmentId> = new Set();

@@ -22,8 +22,12 @@ export interface DesktopAppActivationTarget {
 }
 
 export interface DesktopAppActivationDependencies {
-  readonly getTarget: (environmentId?: EnvironmentId) => DesktopAppActivationTarget | null;
-  readonly findThread: (ref: ScopedThreadRef) => { readonly projectId: ProjectId } | null;
+  readonly getTarget: (
+    environmentId?: EnvironmentId,
+  ) => DesktopAppActivationTarget | null | Promise<DesktopAppActivationTarget | null>;
+  readonly findThread: (
+    ref: ScopedThreadRef,
+  ) => { readonly projectId: ProjectId } | null | Promise<{ readonly projectId: ProjectId } | null>;
   readonly openExistingThread: (ref: ScopedThreadRef) => Promise<void>;
   readonly findProject: (
     environmentId: EnvironmentId,
@@ -61,7 +65,7 @@ export async function handleDesktopAppActivationRequest(
   request: DesktopAppActivationRequest,
   dependencies: DesktopAppActivationDependencies,
 ): Promise<DesktopAppActivationResponse> {
-  const target = dependencies.getTarget(
+  const target = await dependencies.getTarget(
     request.type === "open-thread" ? request.environmentId : undefined,
   );
   if (target === null) {
@@ -81,14 +85,14 @@ export async function handleDesktopAppActivationRequest(
       );
     }
     const ref = { environmentId: target.environmentId, threadId: request.threadId };
-    const thread = dependencies.findThread(ref);
-    if (thread === null)
-      return failure(
-        request.requestId,
-        "thread-open-failed",
-        "The requested thread is not available in this environment.",
-      );
     try {
+      const thread = await dependencies.findThread(ref);
+      if (thread === null)
+        return failure(
+          request.requestId,
+          "thread-open-failed",
+          "The requested thread is not available in this environment.",
+        );
       await dependencies.openExistingThread(ref);
       return {
         version: 1,

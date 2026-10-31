@@ -29,7 +29,9 @@ export function threadStatusSnapshot(
       .map((project) => [project.id, project]),
   );
   const pendingInput = (thread: OrchestrationV2ThreadShell) =>
-    thread.pendingRuntimeRequest != null || thread.hasActionableProposedPlan;
+    thread.pendingRuntimeRequest != null ||
+    thread.hasActionableProposedPlan ||
+    (thread.pendingGuestMessageCount ?? 0) > 0;
   const active = (thread: OrchestrationV2ThreadShell) =>
     live.has(thread.activityRunStatus ?? thread.status) ||
     pendingInput(thread) ||

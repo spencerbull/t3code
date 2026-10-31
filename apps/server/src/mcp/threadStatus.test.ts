@@ -55,6 +55,23 @@ it("bounds a metadata feed, prioritizes live work, and excludes conversation and
       0,
     ).threads[0]?.thread_id,
   ).toBe(olderApproval.id);
+  const olderGuestRequest = {
+    ...olderApproval,
+    id: ThreadId.make("old-guest-request"),
+    hasActionableProposedPlan: false,
+    pendingGuestMessageCount: 1,
+  };
+  expect(
+    threadStatusSnapshot(
+      EnvironmentId.make("local"),
+      [
+        ...Array.from({ length: 64 }, (_, i) => ({ ...working, id: ThreadId.make(`live-${i}`) })),
+        olderGuestRequest,
+      ],
+      [project],
+      0,
+    ).threads[0],
+  ).toMatchObject({ thread_id: olderGuestRequest.id, pending_input: true });
   expect(JSON.stringify(result)).not.toContain("PRIVATE");
   expect(result.threads[0]).not.toHaveProperty("latestVisibleMessage");
   expect(

@@ -14,7 +14,9 @@ import { newProjectId } from "../../lib/utils";
 import { readProjects, readThreadShell, waitForProject } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
 import { projectEnvironment } from "../../state/projects";
-import { useEnvironmentShellHasSnapshot } from "../../state/shell";
+import { waitForEnvironmentShellSnapshot } from "../../state/shell";
+import { desktopActivationThread } from "../../state/desktopActivation";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 export function DesktopAppActivationCoordinator() {
@@ -25,9 +27,10 @@ export function DesktopAppActivationCoordinator() {
   const openThread = useNewThreadHandler();
   const queueRef = useRef(Promise.resolve());
   const activation = window.desktopBridge?.appActivation;
-  const shellHasSnapshot = useEnvironmentShellHasSnapshot(
-    primaryEnvironment?.environmentId ?? null,
-  );
+  const loadThread = useAtomQueryRunner(desktopActivationThread, {
+    reportFailure: false,
+    refresh: true,
+  });
   const ready =
     activation !== undefined &&
     environments.some(
@@ -37,29 +40,31 @@ export function DesktopAppActivationCoordinator() {
 
   const processRequest = useEffectEvent(async (request: DesktopAppActivationRequest) =>
     handleDesktopAppActivationRequest(request, {
-      getTarget: (environmentId) => {
+      getTarget: async (environmentId) => {
         const target =
           environmentId === undefined
             ? primaryEnvironment
             : environments.find((environment) => environment.environmentId === environmentId);
 
-        if (
-          target?.connection.phase !== "connected" ||
-          target.serverConfig === null ||
-          (environmentId === undefined && !shellHasSnapshot)
-        ) {
+        if (target?.connection.phase !== "connected" || target.serverConfig === null) {
           return null;
         }
+        if (!(await waitForEnvironmentShellSnapshot(target.environmentId))) return null;
         return {
           environmentId: target.environmentId,
           platform: target.serverConfig.environment.platform.os,
         };
       },
-      findThread: (ref) => {
-        const thread = readThreadShell(ref);
-        return thread === null || thread.archivedAt !== null
-          ? null
-          : { projectId: thread.projectId };
+      findThread: async (ref) => {
+        const cached = readThreadShell(ref);
+        if (cached !== null)
+          return cached.archivedAt === null ? { projectId: cached.projectId } : null;
+        const result = await loadThread({
+          environmentId: ref.environmentId,
+          input: { threadId: ref.threadId },
+        });
+        if (result._tag === "Failure" || result.value.thread.archivedAt !== null) return null;
+        return { projectId: result.value.thread.projectId };
       },
       openExistingThread: async (ref) => {
         await router.navigate({
