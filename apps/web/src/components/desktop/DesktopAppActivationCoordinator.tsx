@@ -1,5 +1,7 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { DesktopAppActivationRequest } from "@t3tools/contracts";
+import { useRouter } from "@tanstack/react-router";
+import { buildThreadRouteParams } from "../../threadRoutes";
 import { useEffect, useEffectEvent, useRef } from "react";
 
 import { handleDesktopAppActivationRequest } from "../../desktopAppActivation";
@@ -9,14 +11,16 @@ import {
   inferProjectTitleFromPath,
 } from "@t3tools/client-runtime/state/projects";
 import { newProjectId } from "../../lib/utils";
-import { readProjects, waitForProject } from "../../state/entities";
-import { usePrimaryEnvironment } from "../../state/environments";
+import { readProjects, readThreadShell, waitForProject } from "../../state/entities";
+import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentShellHasSnapshot } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 export function DesktopAppActivationCoordinator() {
   const primaryEnvironment = usePrimaryEnvironment();
+  const { environments } = useEnvironments();
+  const router = useRouter();
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const openThread = useNewThreadHandler();
   const queueRef = useRef(Promise.resolve());
@@ -26,23 +30,48 @@ export function DesktopAppActivationCoordinator() {
   );
   const ready =
     activation !== undefined &&
-    primaryEnvironment?.connection.phase === "connected" &&
-    primaryEnvironment.serverConfig !== null &&
-    shellHasSnapshot;
+    environments.some(
+      (environment) =>
+        environment.connection.phase === "connected" && environment.serverConfig !== null,
+    );
 
   const processRequest = useEffectEvent(async (request: DesktopAppActivationRequest) =>
     handleDesktopAppActivationRequest(request, {
-      getTarget: () => {
+      getTarget: (environmentId) => {
+        const target =
+          environmentId === undefined
+            ? primaryEnvironment
+            : environments.find((environment) => environment.environmentId === environmentId);
+
         if (
-          primaryEnvironment?.connection.phase !== "connected" ||
-          primaryEnvironment.serverConfig === null
+          target?.connection.phase !== "connected" ||
+          target.serverConfig === null ||
+          (environmentId === undefined && !shellHasSnapshot)
         ) {
           return null;
         }
         return {
-          environmentId: primaryEnvironment.environmentId,
-          platform: primaryEnvironment.serverConfig.environment.platform.os,
+          environmentId: target.environmentId,
+          platform: target.serverConfig.environment.platform.os,
         };
+      },
+      findThread: (ref) => {
+        const thread = readThreadShell(ref);
+        return thread === null || thread.archivedAt !== null
+          ? null
+          : { projectId: thread.projectId };
+      },
+      openExistingThread: async (ref) => {
+        await router.navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(ref),
+        });
+        const expected = router.buildLocation({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(ref),
+        });
+        if (router.state.location.pathname !== expected.pathname)
+          throw new Error("The requested thread navigation did not complete.");
       },
       findProject: (environmentId, workspaceRoot) =>
         findProjectByPath(

@@ -1,3 +1,4 @@
+import { threadStatusSnapshot } from "./threadStatus.ts";
 import {
   CommandId,
   type RunId,
@@ -43,6 +44,7 @@ import {
   type OrchestratorMcpThreadListInput,
   type OrchestratorMcpThreadListItem,
   type OrchestratorMcpThreadListResult,
+  type OrchestratorMcpThreadStatusSnapshot,
   type OrchestratorMcpThreadReadInput,
   type OrchestratorMcpThreadReadResult,
   type OrchestratorMcpThreadRun,
@@ -148,6 +150,9 @@ type TerminalTaskStatus = Extract<
 >;
 
 export interface OrchestratorMcpServiceShape {
+  readonly threadStatus: (
+    scope: McpInvocationScope,
+  ) => Effect.Effect<OrchestratorMcpThreadStatusSnapshot, OrchestratorMcpFailure>;
   readonly capabilities: (
     scope: McpInvocationScope,
     input?: OrchestratorMcpCapabilitiesInput,
@@ -2809,6 +2814,23 @@ const make = Effect.gen(function* () {
         return { threads: created };
       },
     ),
+    threadStatus: Effect.fn("OrchestratorMcpService.threadStatus")(function* (scope) {
+      yield* loadCaller(scope);
+      const snapshot = yield* threadManagement
+        .getShellSnapshot({ location: "active" })
+        .pipe(
+          Effect.mapError(() => failure("orchestration_error", "Unable to read thread status.")),
+        );
+      const projectSnapshot = yield* projects.snapshot.pipe(
+        Effect.mapError(() => failure("orchestration_error", "Unable to read projects.")),
+      );
+      return threadStatusSnapshot(
+        scope.environmentId,
+        snapshot.threads,
+        projectSnapshot.projects,
+        yield* Clock.currentTimeMillis,
+      );
+    }),
     listThreads: Effect.fn("OrchestratorMcpService.listThreads")(function* (scope, input) {
       const { parent } = yield* loadCaller(scope);
       const projectId = input.allProjects

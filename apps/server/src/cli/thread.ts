@@ -1,6 +1,7 @@
 import {
   OrchestratorMcpFailure,
   OrchestratorMcpThreadListResult,
+  OrchestratorMcpThreadStatusSnapshot,
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadSendResult,
   OrchestratorMcpThreadWaitResult,
@@ -757,10 +758,45 @@ const threadShowCommand = Command.make("show", {
   ),
 );
 
+const threadStatusCommand = Command.make("status", {
+  ...projectLocationFlags,
+  json: jsonFlag,
+  watch: Flag.Boolean("watch").pipe(
+    Flag.withDefault(false),
+    Flag.withDescription("Keep one connection and print metadata snapshots once per second."),
+  ),
+}).pipe(
+  Command.withDescription("Read bounded thread metadata across projects without message contents."),
+  Command.withHandler((flags) =>
+    withThreadTools(
+      flags,
+      Effect.fn("cli.thread.status")(function* (tools) {
+        const read = Effect.gen(function* () {
+          const snapshot = yield* tools.call(
+            "t3_thread_status",
+            {},
+            OrchestratorMcpThreadStatusSnapshot,
+          );
+          if (flags.json || flags.watch) yield* printJson(snapshot);
+          else
+            for (const thread of snapshot.threads)
+              yield* Console.log(
+                `${thread.thread_id}  ${thread.status.padEnd(11)}  ${thread.title}`,
+              );
+        });
+        yield* read;
+        if (flags.watch)
+          return yield* Effect.forever(Effect.sleep("1 second").pipe(Effect.andThen(read)));
+      }),
+    ).pipe(reportThreadErrors),
+  ),
+);
+
 export const threadCommand = Command.make("thread").pipe(
   Command.withDescription("Start, message, and read threads on the running server."),
   Command.withSubcommands([
     threadListCommand,
+    threadStatusCommand,
     threadStartCommand,
     threadSendCommand,
     threadShowCommand,
