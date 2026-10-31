@@ -23,6 +23,8 @@ function dependencies(
 ): DesktopAppActivationDependencies {
   return {
     getTarget: () => ({ environmentId, platform: "linux" }),
+    findThread: () => ({ projectId: existingProjectId }),
+    openExistingThread: vi.fn(async () => undefined),
     findProject: () => ({
       id: existingProjectId,
       environmentId,
@@ -67,4 +69,26 @@ describe("desktop app activation", () => {
 
     expect(response).toMatchObject({ ok: false, code: "platform-mismatch" });
   });
+});
+
+it("opens only the exact existing environment and thread without creating a project or thread", async () => {
+  const deps = dependencies();
+  const exact = { ...request, type: "open-thread" as const, threadId, environmentId };
+  expect(await handleDesktopAppActivationRequest(exact, deps)).toMatchObject({
+    ok: true,
+    threadId,
+    projectId: existingProjectId,
+  });
+  expect(deps.openExistingThread).toHaveBeenCalledWith({ environmentId, threadId });
+  expect(deps.createProject).not.toHaveBeenCalled();
+  expect(deps.openThread).not.toHaveBeenCalled();
+  expect(
+    await handleDesktopAppActivationRequest(exact, dependencies({ findThread: () => null })),
+  ).toMatchObject({ ok: false, code: "thread-open-failed" });
+  expect(
+    await handleDesktopAppActivationRequest(
+      { ...exact, environmentId: EnvironmentId.make("other") },
+      deps,
+    ),
+  ).toMatchObject({ ok: false, code: "environment-unavailable" });
 });

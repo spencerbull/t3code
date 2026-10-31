@@ -6,6 +6,8 @@ import * as NodeOS from "node:os";
 
 import {
   DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
+  EnvironmentId,
+  ThreadId,
   DesktopAppActivationErrorCode,
   DesktopAppActivationResponse,
   type DesktopAppActivationPlatform,
@@ -23,13 +25,15 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { Argument, Command } from "effect/cli";
+import { Argument, Command, Flag } from "effect/cli";
 
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 import { baseDirFlag } from "./config.ts";
 
 const CLI_RESPONSE_TIMEOUT_MS = 17_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const decodeThreadId = Schema.decodeEffect(ThreadId);
+const decodeEnvironmentId = Schema.decodeEffect(EnvironmentId);
 const isDesktopAppActivationResponse = Schema.is(DesktopAppActivationResponse);
 
 export class DesktopAppSshUnsupportedError extends Schema.TaggedError<DesktopAppSshUnsupportedError>()(
@@ -200,7 +204,25 @@ const appEnvironment = Config.all({
 const runAppCommand = Effect.fn("cli.app")(function* (flags: {
   readonly baseDir: Option.Option<string>;
   readonly workspaceRoot: Option.Option<string>;
+  readonly thread: Option.Option<string>;
+  readonly targetEnvironment: Option.Option<string>;
 }) {
+  if (Option.isSome(flags.targetEnvironment) && Option.isNone(flags.thread)) {
+    return yield* new DesktopAppRequestFailedError({
+      code: "invalid-request",
+      requestId: "cli",
+      workspaceRoot: "environment",
+      cause: "--environment requires --thread",
+    });
+  }
+  if (Option.isSome(flags.thread) && Option.isSome(flags.workspaceRoot)) {
+    return yield* new DesktopAppRequestFailedError({
+      code: "invalid-request",
+      requestId: "cli",
+      workspaceRoot: "thread",
+      cause: "Do not pass a path with --thread",
+    });
+  }
   const environment = yield* appEnvironment;
   const hostPlatform = yield* HostProcess.Platform;
   if (Option.isSome(environment.sshConnection) || Option.isSome(environment.sshTty)) {
@@ -228,13 +250,26 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
     });
   const crypto = yield* Crypto.Crypto;
   const requestId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
-  const request: DesktopAppActivationRequest = {
-    version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
-    requestId,
-    type: "open-workspace",
-    workspaceRoot,
-    platform: hostPlatform,
-  };
+  const request: DesktopAppActivationRequest = Option.isSome(flags.thread)
+    ? {
+        version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
+        requestId,
+        type: "open-thread",
+        threadId: yield* decodeThreadId(flags.thread.value),
+        ...(Option.isSome(flags.targetEnvironment)
+          ? {
+              environmentId: yield* decodeEnvironmentId(flags.targetEnvironment.value),
+            }
+          : {}),
+        platform: hostPlatform,
+      }
+    : {
+        version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
+        requestId,
+        type: "open-workspace",
+        workspaceRoot,
+        platform: hostPlatform,
+      };
   const address = resolveAddress("userdata");
   const fallbackAddress = allowDevFallback ? resolveAddress("dev") : undefined;
 
@@ -266,11 +301,29 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
     });
   }
 
-  yield* Console.log(`Opened ${workspaceRoot} in T3 Code.`);
+  if (request.type === "open-thread" && response.threadId !== request.threadId) {
+    return yield* new DesktopAppRequestFailedError({
+      code: "thread-open-failed",
+      requestId,
+      workspaceRoot: request.threadId,
+      cause: "Desktop opened a different thread",
+    });
+  }
+  yield* Console.log(
+    `Opened ${request.type === "open-thread" ? request.threadId : workspaceRoot} in T3 Code.`,
+  );
 });
 
 export const appCommand = Command.make("app", {
   baseDir: baseDirFlag,
+  thread: Flag.String("thread").pipe(
+    Flag.withDescription("Open an existing thread by id."),
+    Flag.optional,
+  ),
+  targetEnvironment: Flag.String("environment").pipe(
+    Flag.withDescription("Thread environment id. Defaults to the primary local environment."),
+    Flag.optional,
+  ),
   workspaceRoot: Argument.String("path").pipe(
     Argument.withDescription("Project directory. Default: current directory."),
     Argument.optional,

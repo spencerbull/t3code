@@ -1,5 +1,7 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { DesktopAppActivationRequest } from "@t3tools/contracts";
+import { useRouter } from "@tanstack/react-router";
+import { buildThreadRouteParams } from "../../threadRoutes";
 import { useEffect, useEffectEvent, useRef } from "react";
 
 import { handleDesktopAppActivationRequest } from "../../desktopAppActivation";
@@ -9,40 +11,68 @@ import {
   inferProjectTitleFromPath,
 } from "@t3tools/client-runtime/state/projects";
 import { newProjectId } from "../../lib/utils";
-import { readProjects, waitForProject } from "../../state/entities";
-import { usePrimaryEnvironment } from "../../state/environments";
+import { readProjects, readThreadShell, waitForProject } from "../../state/entities";
+import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
 import { projectEnvironment } from "../../state/projects";
-import { useEnvironmentShellHasSnapshot } from "../../state/shell";
+import {
+  desktopActivationThread,
+  waitForDesktopActivationTarget,
+} from "../../state/desktopActivation";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 export function DesktopAppActivationCoordinator() {
   const primaryEnvironment = usePrimaryEnvironment();
+  const { environments } = useEnvironments();
+  const router = useRouter();
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const openThread = useNewThreadHandler();
   const queueRef = useRef(Promise.resolve());
   const activation = window.desktopBridge?.appActivation;
-  const shellHasSnapshot = useEnvironmentShellHasSnapshot(
-    primaryEnvironment?.environmentId ?? null,
-  );
+  const loadThread = useAtomQueryRunner(desktopActivationThread, {
+    reportFailure: false,
+    refresh: true,
+  });
   const ready =
     activation !== undefined &&
-    primaryEnvironment?.connection.phase === "connected" &&
-    primaryEnvironment.serverConfig !== null &&
-    shellHasSnapshot;
+    environments.some(
+      (environment) =>
+        environment.connection.phase === "connected" && environment.serverConfig !== null,
+    );
 
   const processRequest = useEffectEvent(async (request: DesktopAppActivationRequest) =>
     handleDesktopAppActivationRequest(request, {
-      getTarget: () => {
+      getTarget: (environmentId) => {
+        const target = environmentId ?? primaryEnvironment?.environmentId;
+        return target === undefined ? null : waitForDesktopActivationTarget(target);
+      },
+      findThread: async (ref) => {
+        const cached = readThreadShell(ref);
+        if (cached !== null)
+          return cached.archivedAt === null ? { projectId: cached.projectId } : null;
+        const result = await loadThread({
+          environmentId: ref.environmentId,
+          input: { threadId: ref.threadId },
+        });
         if (
-          primaryEnvironment?.connection.phase !== "connected" ||
-          primaryEnvironment.serverConfig === null
-        ) {
+          result._tag === "Failure" ||
+          result.value.thread.archivedAt !== null ||
+          result.value.thread.deletedAt !== null
+        )
           return null;
-        }
-        return {
-          environmentId: primaryEnvironment.environmentId,
-          platform: primaryEnvironment.serverConfig.environment.platform.os,
-        };
+        return { projectId: result.value.thread.projectId };
+      },
+      openExistingThread: async (ref) => {
+        await router.navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(ref),
+        });
+        const expected = router.buildLocation({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(ref),
+        });
+        if (router.state.location.pathname !== expected.pathname)
+          throw new Error("The requested thread navigation did not complete.");
       },
       findProject: (environmentId, workspaceRoot) =>
         findProjectByPath(

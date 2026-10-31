@@ -114,6 +114,12 @@ the message to read it from stdin.
 2 when the agent waits for an answer you give in the app. Add `--json` for a
 result that always includes the thread id.
 
+For a status display or hardware controller, `t3 thread status --json` returns at
+most 64 thread summaries across projects without message contents. Add `--watch`
+for newline-delimited snapshots over one connection. `t3 app --thread <id>` opens
+an existing thread in the running desktop app; add `--environment <id>` when it
+belongs to another connected environment.
+
 ## Remove an agent
 
 Approved agents appear under **Settings → Sharing & access** like other clients.

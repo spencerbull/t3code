@@ -2507,11 +2507,19 @@ function pdfScroll(screen: Screen) {
   const scrollTo = (options: ScrollToOptions) =>
     act(async () => {
       const node = region();
-      const scrolled = new Promise<void>((resolve) =>
-        node.addEventListener("scroll", () => resolve(), { once: true }),
-      );
-      node.scrollTo(options);
-      await scrolled;
+      const top = node.scrollTop;
+      const left = node.scrollLeft;
+      let resolveScroll!: () => void;
+      const scrolled = new Promise<void>((resolve) => {
+        resolveScroll = resolve;
+      });
+      node.addEventListener("scroll", resolveScroll, { once: true });
+      try {
+        node.scrollTo({ ...options, behavior: "instant" });
+        if (node.scrollTop !== top || node.scrollLeft !== left) await scrolled;
+      } finally {
+        node.removeEventListener("scroll", resolveScroll);
+      }
     });
   return { region, canvas, offset, scrollTo };
 }
@@ -2575,6 +2583,7 @@ it("keeps workspace PDF scroll and zoom after reloads", async () => {
     expect(region().scrollTop).toBe(0);
     expect(region().scrollLeft).toBe(0);
   });
+  await scrollTo({ top: 0, left: 0 });
 });
 
 it("clamps workspace PDF scroll when pages shrink or disappear", async () => {

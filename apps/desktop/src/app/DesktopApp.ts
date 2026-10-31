@@ -187,6 +187,13 @@ const bootstrap = Effect.gen(function* () {
 
   yield* snapShot.initialize;
 
+  if (!(yield* Ref.get(state.quitting))) {
+    yield* appActivation.start.pipe(
+      Effect.tap(() => logBootstrapInfo("desktop app control socket ready")),
+      Effect.catch((error) => logStartupError("desktop app control socket unavailable", { error })),
+    );
+  }
+
   if (!settings.localEnvironmentEnabled) {
     yield* logBootstrapInfo("bootstrap skipping local environment (disabled in settings)");
     if (!(yield* Ref.get(state.quitting))) {
@@ -245,10 +252,6 @@ const bootstrap = Effect.gen(function* () {
     }
     yield* primaryBackend.start;
     yield* logBootstrapInfo("bootstrap backend start requested");
-    yield* appActivation.start.pipe(
-      Effect.tap(() => logBootstrapInfo("desktop app control socket ready")),
-      Effect.catch((error) => logStartupError("desktop app control socket unavailable", { error })),
-    );
     yield* Effect.forkScoped(wslBackend.reconcile);
   }
 }).pipe(Effect.withSpan("desktop.bootstrap"));

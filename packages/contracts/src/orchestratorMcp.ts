@@ -875,3 +875,29 @@ export class OrchestratorMcpFailure extends Schema.TaggedError<OrchestratorMcpFa
     message: Schema.String,
   },
 ) {}
+
+export const OrchestratorMcpThreadStatusSnapshot = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  environment_id: EnvironmentId,
+  generated_at_ms: NonNegativeInt,
+  threads: Schema.Array(
+    Schema.Struct({
+      thread_id: ThreadId,
+      title: Schema.String,
+      project_title: Schema.String,
+      workspace_root: Schema.String,
+      branch: Schema.NullOr(Schema.String),
+      worktree_path: Schema.NullOr(Schema.String),
+      provider: Schema.String,
+      status: Schema.String,
+      settled: Schema.Boolean,
+      snoozed: Schema.Boolean,
+      pending_input: Schema.Boolean,
+      background_work: Schema.Boolean,
+      updated_at: IsoDateTime,
+      latest_run_completed_at: Schema.NullOr(IsoDateTime),
+      last_visited_at: Schema.NullOr(IsoDateTime),
+    }),
+  ),
+});
+export type OrchestratorMcpThreadStatusSnapshot = typeof OrchestratorMcpThreadStatusSnapshot.Type;

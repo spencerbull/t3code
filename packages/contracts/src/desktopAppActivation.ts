@@ -1,19 +1,30 @@
 import * as Schema from "effect/Schema";
 
-import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { EnvironmentId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION = 1 as const;
 
 export const DesktopAppActivationPlatform = Schema.Literals(["darwin", "linux", "win32"]);
 export type DesktopAppActivationPlatform = typeof DesktopAppActivationPlatform.Type;
 
-export const DesktopAppActivationRequest = Schema.Struct({
+const DesktopWorkspaceActivationRequest = Schema.Struct({
   version: Schema.Literal(DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION),
   requestId: TrimmedNonEmptyString,
   type: Schema.Literal("open-workspace"),
   workspaceRoot: TrimmedNonEmptyString,
   platform: DesktopAppActivationPlatform,
 });
+export const DesktopAppActivationRequest = Schema.Union([
+  DesktopWorkspaceActivationRequest,
+  Schema.Struct({
+    version: Schema.Literal(DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION),
+    requestId: TrimmedNonEmptyString,
+    type: Schema.Literal("open-thread"),
+    threadId: ThreadId,
+    environmentId: Schema.optional(EnvironmentId),
+    platform: DesktopAppActivationPlatform,
+  }),
+]);
 export type DesktopAppActivationRequest = typeof DesktopAppActivationRequest.Type;
 
 export const DesktopAppActivationErrorCode = Schema.Literals([

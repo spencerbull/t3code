@@ -28,6 +28,7 @@ import {
   OrchestratorMcpThreadInterruptResult,
   OrchestratorMcpThreadListInput,
   OrchestratorMcpThreadListResult,
+  OrchestratorMcpThreadStatusSnapshot,
   OrchestratorMcpThreadReadInput,
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadSendInput,
@@ -220,6 +221,18 @@ const CreateThreadsTool = Tool.make("create_threads", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
+const ThreadStatusTool = Tool.make("t3_thread_status", {
+  description:
+    "Read bounded thread status metadata across projects. Omits messages, activities and provider payloads.",
+  parameters: Schema.Struct({ environmentId: OrchestratorMcpEnvironmentTarget }),
+  success: OrchestratorMcpThreadStatusSnapshot,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
 const ThreadListTool = Tool.make("t3_thread_list", {
   description:
     "List threads newest first, in one project or with `allProjects`. Page with `cursor`.",
@@ -360,6 +373,7 @@ export const OrchestratorToolkit = Toolkit.make(
   RequestSecretTool,
   CreateThreadsTool,
   ThreadListTool,
+  ThreadStatusTool,
   ThreadReadTool,
   ThreadUpdateTool,
   ThreadSendTool,

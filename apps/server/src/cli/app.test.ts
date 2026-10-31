@@ -283,10 +283,11 @@ describe("t3 app", () => {
         yield* runCli(["app"], { T3CODE_HOME: baseDir });
         yield* runCli(["app", explicitPath, "--base-dir", baseDir]);
 
-        expect(desktop.received.map((request) => request.workspaceRoot)).toEqual([
-          workingDirectory,
-          explicitPath,
-        ]);
+        expect(
+          desktop.received.map((request) =>
+            request.type === "open-workspace" ? request.workspaceRoot : null,
+          ),
+        ).toEqual([workingDirectory, explicitPath]);
         expect(desktop.received.every((request) => request.platform === platform)).toBe(true);
       }).pipe(Effect.scoped),
     ),
@@ -386,3 +387,47 @@ describe("t3 app", () => {
       ),
   );
 });
+
+it.effect(
+  "app --thread requests the exact environment and rejects a desktop reply for another thread",
+  () =>
+    withTempDirectory("t3-cli-thread-", (root) =>
+      Effect.gen(function* () {
+        const desktop = yield* fakeDesktop({
+          baseDir: root,
+          reply: (request) => ({
+            version: 1,
+            requestId: request.requestId,
+            ok: true,
+            projectId: "project-1",
+            threadId:
+              request.type === "open-thread" && request.threadId === "exact-thread"
+                ? request.threadId
+                : "wrong",
+          }),
+        });
+        yield* runCli([
+          "app",
+          "--base-dir",
+          root,
+          "--thread",
+          "exact-thread",
+          "--environment",
+          "exact-environment",
+        ]);
+        expect(desktop.received[0]).toMatchObject({
+          type: "open-thread",
+          threadId: "exact-thread",
+          environmentId: "exact-environment",
+        });
+        const error = yield* runCli([
+          "app",
+          "--base-dir",
+          root,
+          "--thread",
+          "different-thread",
+        ]).pipe(Effect.flip);
+        expect(String(error)).toContain("thread-open-failed");
+      }),
+    ),
+);
