@@ -1,3 +1,4 @@
+import { isChildRunLive, isProviderNativeSubagentThread } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   OrchestrationV2ThreadShell,
@@ -28,10 +29,19 @@ export function threadStatusSnapshot(
       .filter((project) => project.deletedAt === null)
       .map((project) => [project.id, project]),
   );
-  const pendingInput = (thread: OrchestrationV2ThreadShell) =>
-    thread.pendingRuntimeRequest != null ||
-    thread.hasActionableProposedPlan ||
-    (thread.pendingGuestMessageCount ?? 0) > 0;
+  const pendingInput = (thread: OrchestrationV2ThreadShell) => {
+    const child =
+      thread.lineage.relationshipToParent === "subagent" || thread.delegatedFrom !== undefined;
+    const runtimeInput =
+      thread.pendingRuntimeRequest != null &&
+      (!child ||
+        (thread.pendingRuntimeRequest.kind !== "auth_refresh" &&
+          !isProviderNativeSubagentThread(thread) &&
+          isChildRunLive(thread)));
+    return (
+      runtimeInput || thread.hasActionableProposedPlan || (thread.pendingGuestMessageCount ?? 0) > 0
+    );
+  };
   const active = (thread: OrchestrationV2ThreadShell) =>
     live.has(thread.activityRunStatus ?? thread.status) ||
     pendingInput(thread) ||

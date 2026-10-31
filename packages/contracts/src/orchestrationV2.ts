@@ -514,6 +514,20 @@ export function isProviderNativeSubagentThread(
   return thread.lineage.relationshipToParent === "subagent" && thread.creationSource === "provider";
 }
 
+// An async question outlives the subagent's run, but once that run ends the
+// parent is no longer waiting on the answer, so it stops counting as input.
+// The activity run stays set when a follow-up is queued behind a blocked run;
+// older servers omit it, so fall back to the latest run's status.
+export const isChildRunLive = (
+  thread: Pick<OrchestrationV2ThreadShell, "activityRunStatus" | "status">,
+) =>
+  thread.activityRunStatus !== undefined
+    ? thread.activityRunStatus !== null
+    : thread.status === "preparing" ||
+      thread.status === "starting" ||
+      thread.status === "running" ||
+      thread.status === "waiting";
+
 export const IDLE_COMPACTION_TEXT = "/compact";
 
 interface CompactionMessageFields {

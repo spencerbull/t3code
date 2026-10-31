@@ -1,4 +1,10 @@
-import { EnvironmentId, ThreadId, MessageId, type Project } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  MessageId,
+  RuntimeRequestId,
+  type Project,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { expect, it } from "vite-plus/test";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
@@ -127,6 +133,17 @@ it("keeps a settled thread's new plan and pending-input subagents visible withou
     id: ThreadId.make("child-needs-input"),
     hasActionableProposedPlan: true,
   };
+  const endedQuestion = {
+    ...child,
+    id: ThreadId.make("ended-question"),
+    status: "completed" as const,
+    activityRunStatus: null,
+    pendingRuntimeRequest: {
+      id: RuntimeRequestId.make("old-question"),
+      kind: "user_input" as const,
+      createdAt: root.updatedAt,
+    },
+  };
   const project = {
     id: root.projectId,
     title: "Project",
@@ -135,7 +152,7 @@ it("keeps a settled thread's new plan and pending-input subagents visible withou
   };
   const snapshot = threadStatusSnapshot(
     EnvironmentId.make("local"),
-    [root, child, needsInput],
+    [root, child, needsInput, endedQuestion],
     [project],
     0,
   );
@@ -143,4 +160,12 @@ it("keeps a settled thread's new plan and pending-input subagents visible withou
     [root.id, needsInput.id].toSorted(),
   );
   expect(snapshot.threads.every((thread) => thread.pending_input)).toBe(true);
+  const liveQuestion = { ...endedQuestion, activityRunStatus: "waiting" as const };
+  const topLevelQuestion = { ...endedQuestion, lineage: root.lineage };
+  const endedPlan = { ...endedQuestion, hasActionableProposedPlan: true };
+  for (const actionable of [liveQuestion, topLevelQuestion, endedPlan]) {
+    expect(
+      threadStatusSnapshot(EnvironmentId.make("local"), [actionable], [project], 0).threads[0],
+    ).toMatchObject({ thread_id: actionable.id, pending_input: true });
+  }
 });

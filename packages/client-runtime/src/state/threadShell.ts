@@ -6,7 +6,11 @@ import type {
   ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
-import { isProviderNativeSubagentThread, OrchestrationV2ThreadShell } from "@t3tools/contracts";
+import {
+  isChildRunLive,
+  isProviderNativeSubagentThread,
+  OrchestrationV2ThreadShell,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
 
@@ -30,20 +34,6 @@ const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
   ProjectId,
   ReadonlyArray<ScopedThreadRef>
 > = new Map();
-
-// An async question outlives the subagent's run, but once that run ends the
-// parent is no longer waiting on the answer, so it stops counting as input.
-// The activity run stays set when a follow-up is queued behind a blocked run;
-// older servers omit it, so fall back to the latest run's status.
-const isChildRunLive = (
-  thread: Pick<OrchestrationV2ThreadShell, "activityRunStatus" | "status">,
-) =>
-  thread.activityRunStatus !== undefined
-    ? thread.activityRunStatus !== null
-    : thread.status === "preparing" ||
-      thread.status === "starting" ||
-      thread.status === "running" ||
-      thread.status === "waiting";
 
 /**
  * Whether a thread shows under its parent rather than in thread lists: a

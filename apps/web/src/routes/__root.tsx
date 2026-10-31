@@ -197,7 +197,9 @@ function RootRouteBranch() {
         enabled={primaryEnvironmentAuthenticated}
         hostedStatic={authGateState.status === "hosted-static"}
       >
-        {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
+        {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
+          <DesktopAppActivationCoordinator />
+        ) : null}
         {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
           <DesktopWebLinkCoordinator />
         ) : null}
