@@ -14,8 +14,10 @@ import { newProjectId } from "../../lib/utils";
 import { readProjects, readThreadShell, waitForProject } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
 import { projectEnvironment } from "../../state/projects";
-import { waitForEnvironmentShellSnapshot } from "../../state/shell";
-import { desktopActivationThread } from "../../state/desktopActivation";
+import {
+  desktopActivationThread,
+  waitForDesktopActivationTarget,
+} from "../../state/desktopActivation";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { useAtomCommand } from "../../state/use-atom-command";
 
@@ -40,20 +42,9 @@ export function DesktopAppActivationCoordinator() {
 
   const processRequest = useEffectEvent(async (request: DesktopAppActivationRequest) =>
     handleDesktopAppActivationRequest(request, {
-      getTarget: async (environmentId) => {
-        const target =
-          environmentId === undefined
-            ? primaryEnvironment
-            : environments.find((environment) => environment.environmentId === environmentId);
-
-        if (target?.connection.phase !== "connected" || target.serverConfig === null) {
-          return null;
-        }
-        if (!(await waitForEnvironmentShellSnapshot(target.environmentId))) return null;
-        return {
-          environmentId: target.environmentId,
-          platform: target.serverConfig.environment.platform.os,
-        };
+      getTarget: (environmentId) => {
+        const target = environmentId ?? primaryEnvironment?.environmentId;
+        return target === undefined ? null : waitForDesktopActivationTarget(target);
       },
       findThread: async (ref) => {
         const cached = readThreadShell(ref);
@@ -63,7 +54,12 @@ export function DesktopAppActivationCoordinator() {
           environmentId: ref.environmentId,
           input: { threadId: ref.threadId },
         });
-        if (result._tag === "Failure" || result.value.thread.archivedAt !== null) return null;
+        if (
+          result._tag === "Failure" ||
+          result.value.thread.archivedAt !== null ||
+          result.value.thread.deletedAt !== null
+        )
+          return null;
         return { projectId: result.value.thread.projectId };
       },
       openExistingThread: async (ref) => {
